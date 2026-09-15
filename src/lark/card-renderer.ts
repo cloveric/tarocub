@@ -379,7 +379,7 @@ export function renderLarkRunCard(state: LarkRunState, locale: Locale = "zh"): R
     let streamTextIndex = 0;
     for (const group of groupBlocks(state.blocks)) {
       if (group.kind === "text") {
-        const cleaned = cleanCardText(group.content, locale);
+        const cleaned = cleanCardText(group.content, locale, { streaming: true });
         if (cleaned) {
           // Cap each streamed text element — a long answer would otherwise
           // overflow Feishu's per-element limit and fail every card update.
@@ -528,7 +528,7 @@ function splitMarkdownTableCells(line: string): string[] | null {
 function isMarkdownTableDelimiter(line: string): boolean {
   const cells = splitMarkdownTableCells(line);
   return cells !== null && cells.length > 0
-    && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
+    && cells.every((cell) => /^:?-+:?$/.test(cell.trim()));
 }
 
 function isMarkdownTableRow(line: string): boolean {
@@ -630,7 +630,32 @@ function capConstrainedMarkdown(markdown: string): string {
  * a streaming patch cannot freeze the card; final delivery still uses cards
  * split at table boundaries and therefore keeps all tables native. */
 export function constrainLarkCardTables<T extends Record<string, unknown>>(card: T): T {
-  let remaining = LARK_CARD_TABLE_MAX;
+  const priorityTableCount = (() => {
+    let count = 0;
+    const inspect = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(inspect);
+        return;
+      }
+      if (!value || typeof value !== "object") {
+        return;
+      }
+      const record = value as Record<string, unknown>;
+      if (
+        record.tag === "markdown"
+        && typeof record.content === "string"
+        && typeof record.element_id === "string"
+        && /^md_\d+$/.test(record.element_id)
+      ) {
+        count += countLarkMarkdownTables(record.content);
+      }
+      Object.values(record).forEach(inspect);
+    };
+    inspect(card);
+    return count;
+  })();
+  let priorityRemaining = Math.min(priorityTableCount, LARK_CARD_TABLE_MAX);
+  let secondaryRemaining = LARK_CARD_TABLE_MAX - priorityRemaining;
   const visit = (value: unknown): unknown => {
     if (Array.isArray(value)) {
       return value.map(visit);
@@ -640,8 +665,16 @@ export function constrainLarkCardTables<T extends Record<string, unknown>>(card:
     }
     const record = value as Record<string, unknown>;
     if (record.tag === "markdown" && typeof record.content === "string") {
-      const constrained = constrainMarkdownTables(record.content, remaining);
-      remaining -= constrained.retained;
+      const priority = typeof record.element_id === "string" && /^md_\d+$/.test(record.element_id);
+      const constrained = constrainMarkdownTables(
+        record.content,
+        priority ? priorityRemaining : secondaryRemaining,
+      );
+      if (priority) {
+        priorityRemaining -= constrained.retained;
+      } else {
+        secondaryRemaining -= constrained.retained;
+      }
       return { ...record, content: capConstrainedMarkdown(constrained.markdown) };
     }
     return Object.fromEntries(Object.entries(record).map(([key, nested]) => [key, visit(nested)]));
@@ -718,11 +751,11 @@ export function liveRunCardStreamElement(
   }
   let textIndex = -1;
   for (const group of groups) {
-    if (group.kind === "text" && cleanCardText(group.content, locale)) {
+    if (group.kind === "text" && cleanCardText(group.content, locale, { streaming: true })) {
       textIndex += 1;
     }
   }
-  const cleaned = cleanCardText(last.content, locale);
+  const cleaned = cleanCardText(last.content, locale, { streaming: true });
   if (!cleaned || textIndex < 0) {
     return null;
   }
@@ -1064,7 +1097,7 @@ export function renderLarkRunCardCompact(state: LarkRunState, locale: Locale = "
         : `🎯 **目标:** ${truncate(state.goalObjective.trim(), 120)}`,
     ));
   }
-  const answer = cleanCardText(finalAnswerText(state), locale);
+  const answer = cleanCardText(finalAnswerText(state), locale, { streaming: state.status === "running" });
   if (answer) {
     // Degrade commonly hits MID-RUN on exactly the long, tool-heavy turns the
     // rolling tail shipped for (their full card breaches Feishu's 30KB
@@ -1442,9 +1475,13 @@ function renderToolInput(tool: LarkToolEntry): string {
   }
 }
 
-export function cleanCardText(content: string, locale: Locale = "zh"): string {
+export function cleanCardText(
+  content: string,
+  locale: Locale = "zh",
+  options: { streaming?: boolean } = {},
+): string {
   const stripped = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(content)));
-  return transformLarkCardMarkdown(renderCodexFileCitations(stripped, locale)).trim();
+  return transformLarkCardMarkdown(renderCodexFileCitations(stripped, locale, options)).trim();
 }
 
 const LARK_INLINE_MATH_SYMBOLS: Readonly<Record<string, string>> = {
@@ -1469,6 +1506,46 @@ const LARK_INLINE_MATH_SYMBOLS: Readonly<Record<string, string>> = {
   pm: "±",
   infty: "∞",
 };
+
+const LARK_SUPPORTED_MATH_COMMANDS = new Set([
+  ...Object.keys(LARK_INLINE_MATH_SYMBOLS),
+  "text",
+  "textrm",
+  "mathrm",
+  "operatorname",
+  "mathit",
+  "mathbf",
+  "textbf",
+  "boldsymbol",
+  "boxed",
+  "overline",
+  "underline",
+  "frac",
+  "sqrt",
+  "left",
+  "right",
+]);
+
+function canNormalizeLarkMath(body: string, requireCommand = false): boolean {
+  // A paired-dollar match can span currency around a Windows path. Treating
+  // path components as TeX commands corrupts both the path and dollar values.
+  if (/[A-Za-z]:\\/.test(body)) {
+    return false;
+  }
+  const commands = [...body.matchAll(/\\([A-Za-z]+)\b/g)].map((match) => match[1]!);
+  if (commands.some((command) => !LARK_SUPPORTED_MATH_COMMANDS.has(command))) {
+    return false;
+  }
+  if (commands.length > 0) {
+    return true;
+  }
+  if (requireCommand) {
+    return false;
+  }
+  // Preserve escaped prose citations such as `\[1\]`; bracketed arithmetic
+  // without TeX commands still has an operator and remains readable.
+  return /(?:[=<>+*/^_]|[×÷≈≤≥→←±∞√])/.test(body);
+}
 
 function normalizeLarkMathBody(body: string): string {
   let output = body;
@@ -1503,14 +1580,16 @@ function normalizeLarkMathBody(body: string): string {
 }
 
 function normalizeUnsupportedLarkMath(text: string): string {
-  const render = (_match: string, body: string): string => normalizeLarkMathBody(body);
+  const render = (requireCommand = false) => (match: string, body: string): string => (
+    canNormalizeLarkMath(body, requireCommand) ? normalizeLarkMathBody(body) : match
+  );
   return text
-    .replace(/\$\$([^$\n]+)\$\$/g, render)
+    .replace(/\$\$([^$\n]+)\$\$/g, render())
     // Paired dollar signs are also used for currency. Only treat the inline
     // form as math when it contains an actual TeX command.
-    .replace(/\$([^$\n]*\\[A-Za-z]+[^$\n]*)\$/g, render)
-    .replace(/\\\(([^\n]+?)\\\)/g, render)
-    .replace(/\\\[([^\n]+?)\\\]/g, render);
+    .replace(/\$([^$\n]*\\[A-Za-z]+[^$\n]*)\$/g, render(true))
+    .replace(/\\\(([^\n]+?)\\\)/g, render())
+    .replace(/\\\[([^\n]+?)\\\]/g, render());
 }
 
 function normalizeOutsideInlineCode(line: string): string {

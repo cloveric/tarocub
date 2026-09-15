@@ -35,6 +35,7 @@ export function recoveredReplyMarker(locale: "en" | "zh"): string {
 export async function redeliverRecoveredLarkObligations(input: {
   channel: LarkRedeliveryChannel;
   stateDir: string;
+  workspaceOverride?: string;
   instanceName?: string;
   locale: "en" | "zh";
   runtime?: LarkServiceRuntime;
@@ -52,6 +53,7 @@ export async function redeliverRecoveredLarkObligations(input: {
         : "恢复的回复只包含不适合自动重跑的操作，因此已跳过这些操作。");
       const replayPreflight = await preflightLarkResponseDeliveryDirectives(safeReplay, {
         stateDir: input.stateDir,
+        workspaceOverride: input.workspaceOverride,
       });
       // A failed row was already attempted and its deterministic path errors
       // were surfaced to the user. Replaying valid siblings cannot fix a
@@ -95,6 +97,7 @@ export async function redeliverRecoveredLarkObligations(input: {
           ? `${recoveredReplyMarker(input.locale)}\n\n${safeReplay}`
           : safeReplay,
         stateDir: input.stateDir,
+        workspaceOverride: input.workspaceOverride,
         conversationKey,
         bridgeChatId: stableLarkNumericId(conversationKey),
         ...(row.replyTo ? { replyTo: row.replyTo } : {}),

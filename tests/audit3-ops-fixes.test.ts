@@ -424,6 +424,28 @@ describe("Lark inbound attachment size limit", () => {
       await removeTempRoot(root);
     }
   });
+
+  it("uses a neutral extension when an unnamed image has an unknown signature", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "audit3-lark-unknown-image-type-"));
+    try {
+      const downloaded = await downloadLarkAttachments({
+        channel: { downloadResource: vi.fn(async () => Buffer.from("not a recognized image")) } as never,
+        stateDir: root,
+        messageId: "om_unknown_image",
+        attachments: [
+          { kind: "image", fileKey: "img_unknown" },
+          { kind: "image", fileKey: "img_named_unknown", fileName: "scan.png" },
+        ],
+      });
+
+      expect(downloaded.map((attachment) => path.basename(attachment.localPath))).toEqual([
+        "image-1.bin",
+        "scan.bin",
+      ]);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -1,20 +1,18 @@
 # DeepSeek Harness Engine
 
 This document is the release contract for TaroCub's `deepseek` engine. It
-describes behavior verified against **DeepSeek Harness 0.1.2-rc.1**, not a
+describes behavior verified against **DeepSeek Harness 0.1.5-rc.1**, not a
 prompt-level approximation of another engine.
 
 ## Version Policy
 
-At the 2026-09-10 verification point, `0.1.2-rc.1` is both the locally installed
-version and the npm `latest`/`next` release. TaroCub's authenticated
-`/api/remote.mux` transport matches that version's APIProxy-to-Remote migration.
-The npm `alpha` tag currently points to `0.1.5-alpha.2` and is intentionally
-outside this compatibility contract: `0.1.3-alpha.1` introduces
-`SessionHandle`, session locking, and session format v2, while the 0.1.5 alpha
-line advances the session format and plugin APIs again. Adopting those builds
-requires a pinned migration and fresh live probes; they must not be treated as
-a drop-in update to the verified Host protocol.
+At the 2026-09-15 verification point, `0.1.5-rc.1` is both the locally installed
+version and the npm `latest` release. TaroCub's authenticated
+`/api/remote.mux` transport, session-v2 projections, and old/new command
+attachment fields were verified through the real private Host and a streamed
+model turn. The npm `next` tag points to `0.1.5-rc.2` and remains outside this
+compatibility contract until the same probes pass; prerelease tags are never
+promoted merely because they install successfully.
 
 The rc.1 package line has an
 [upstream compatibility report](https://github.com/deepseek-ai/deepseek-harness/discussions/5854)

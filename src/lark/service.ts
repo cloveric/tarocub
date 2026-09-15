@@ -14,7 +14,7 @@ import { loadTelemetryAdapterFromEnv } from "../runtime/telemetry.js";
 import { CronStore } from "../state/cron-store.js";
 import { DEFAULT_ROTATE_OPTIONS } from "../state/log-rotation.js";
 import { parseTimelineEvents, resolveTimelineLogPath, type TimelineEvent } from "../state/timeline-log.js";
-import { loadInstanceConfig } from "../telegram/instance-config.js";
+import { loadInstanceConfig, resolveInstanceWorkspacePath } from "../telegram/instance-config.js";
 import { larkAgentInstructions } from "./agent-instructions.js";
 import { handleLarkCardAction, requestLarkApproval } from "./card-actions.js";
 import { redeliverRecoveredLarkObligations } from "./delivery-recovery.js";
@@ -405,6 +405,7 @@ export async function runLarkService(
         const redelivery = await redeliverRecoveredLarkObligations({
           channel,
           stateDir,
+          workspaceOverride: resolveInstanceWorkspacePath(instanceConfig),
           instanceName,
           locale: instanceConfig.locale === "zh" ? "zh" : "en",
           runtime,

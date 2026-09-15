@@ -2295,15 +2295,12 @@ async function runNormalizedLarkMessage(
         const allArtifactsRejectedOutsideWorkspace = outsideWorkspaceIssues.length > 0
           && outsideWorkspaceIssues.length === initialDeliveryDirectivePreflight.issues.length
           && outsideWorkspaceIssues.length === initialDeliveryDirectivePreflight.artifactCount;
-        // Keep single-file failures and mixed sandbox refusals on their existing
-        // explicit-error path. A partially valid batch with a missing path is
-        // different: repair it before any sibling is sent, so a typo cannot
-        // create a partial delivery followed by duplicate boot-time replays.
-        const hasRepairablePartialMissingArtifact = initialDeliveryDirectivePreflight.issues.some(
-          (issue) => issue.reason === "not-found",
-        ) && initialDeliveryDirectivePreflight.artifactCount > initialDeliveryDirectivePreflight.issues.length;
-        if (allArtifactsRejectedOutsideWorkspace || hasRepairablePartialMissingArtifact) {
-          for (const issue of initialDeliveryDirectivePreflight.issues) {
+        // Mixed batches proceed to the sender: valid siblings are delivered and
+        // invalid paths receive an explicit error. Failed obligations with the
+        // same deterministic path errors are abandoned on boot, so they are not
+        // replayed as duplicate partial batches.
+        if (allArtifactsRejectedOutsideWorkspace) {
+          for (const issue of outsideWorkspaceIssues) {
             await appendLarkTimelineEvent(input.stateDir, normalized, {
               type: "file.rejected",
               outcome: "rejected",
@@ -2323,7 +2320,7 @@ async function runNormalizedLarkMessage(
             detail: "delivery_preflight_rejected_path",
             metadata: {
               phase: "delivery-preflight-guard",
-              rejectedPaths: initialDeliveryDirectivePreflight.issues.length,
+              rejectedPaths: outsideWorkspaceIssues.length,
             },
           });
           const firstUsage = result.usage;

@@ -1112,7 +1112,11 @@ async function sha256File(filePath: string, label: string): Promise<string> {
   return createHash("sha256").update(await readFile(filePath)).digest("hex");
 }
 
-async function verifyMigrationBackup(migration: MigrationRow, legacyPath: string): Promise<void> {
+async function verifyMigrationBackup(
+  migration: MigrationRow,
+  legacyPath: string,
+  options: { allowMissing?: boolean } = {},
+): Promise<void> {
   const expectedPrefix = `${path.basename(legacyPath)}.migration-`;
   if (
     path.dirname(path.resolve(migration.backup_path)) !== path.dirname(path.resolve(legacyPath))
@@ -1120,6 +1124,9 @@ async function verifyMigrationBackup(migration: MigrationRow, legacyPath: string
     || !migration.backup_path.endsWith(".bak")
   ) {
     throw new Error(`Kanban migration receipt has an invalid backup path: ${migration.backup_path}`);
+  }
+  if (options.allowMissing && !await pathExists(migration.backup_path)) {
+    return;
   }
   const backupSha256 = await sha256File(migration.backup_path, "Kanban migration backup");
   if (backupSha256 !== migration.source_sha256) {
@@ -1363,7 +1370,7 @@ export class SqliteKanbanRepository {
             source_run_count: migration.sourceRunCount,
             schema_version: migration.schemaVersion,
             completed_at: migration.completedAt,
-          }, this.legacyPath);
+          }, this.legacyPath, { allowMissing: true });
         }
       } else {
         const sourceSha256 = createHash("sha256").update(source).digest("hex");
@@ -1599,7 +1606,7 @@ export class SqliteKanbanRepository {
       ) {
         throw new Error(`Conflicting legacy Board migration sentinel exists beside ${this.databasePath}; run board diagnostics before continuing`);
       }
-      await verifyMigrationBackup(migration, this.legacyPath);
+      await verifyMigrationBackup(migration, this.legacyPath, { allowMissing: true });
       return;
     }
     const sourceSha256 = createHash("sha256").update(source).digest("hex");

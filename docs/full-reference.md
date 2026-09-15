@@ -340,7 +340,7 @@ npm run dev -- telegram engine antigravity --instance agy-bot
 npm run dev -- telegram engine --instance review-bot
 ```
 
-Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in explicit `bypass` mode because the headless CLI cannot ask a remote chat for per-tool approval. The verified baseline is **Antigravity CLI 1.2.1**. Ordinary turns use one persistent native NDJSON `stream-json` worker per live conversation. Idle workers are reaped after two hours; crashes and startup-setting changes recreate the worker with the same authoritative conversation ID. Antigravity 1.2.1 retries transient model API failures and mid-stream interruptions in-process while preserving completed tool outputs; the structured stream contract remains unchanged. `/model <id>` and `/effort low|medium|high` map to native startup flags. Native `/goal` is the narrow exception: Antigravity does not accept slash commands through stream input, so TaroCub recycles the idle worker, preserves the command in a direct `-p` prompt with structured output parsing, then resumes the conversation in a new stream worker on the next ordinary turn.
+Selecting Antigravity automatically sets that instance to YOLO/full-auto unless it was already in explicit `bypass` mode because the headless CLI cannot ask a remote chat for per-tool approval. The verified baseline is **Antigravity CLI 1.2.2**. Ordinary turns use one persistent native NDJSON `stream-json` worker per live conversation. Idle workers are reaped after two hours; crashes and startup-setting changes recreate the worker with the same authoritative conversation ID. Antigravity 1.2.2 retains transient model API retries and mid-stream recovery while preserving completed tool outputs; the structured stream contract remains unchanged. `/model <id>` and `/effort low|medium|high` map to native startup flags. Native `/goal` is the narrow exception: Antigravity does not accept slash commands through stream input, so TaroCub recycles the idle worker, preserves the command in a direct `-p` prompt with structured output parsing, then resumes the conversation in a new stream worker on the next ordinary turn.
 
 | Feature | Codex | Claude | Kimi | DeepSeek | Antigravity |
 |---|---|---|---|---|---|
@@ -360,7 +360,7 @@ Selecting Antigravity automatically sets that instance to YOLO/full-auto unless 
 | Working directory | Instance or validated thread workspace | Instance or resumed project | Native session cwd | Native session cwd; conflicting workspace claims fail closed | Instance workspace |
 | Process lifecycle | Warm app-server | 2h idle reap | 2h idle reap unless background work remains | Per-instance host; crash restart and ordered recovery | Persistent per conversation; 2h idle reap; UUID resume after crash/config change |
 
-DeepSeek is verified against **Harness 0.1.2-rc.1**. Image payload transport is
+DeepSeek is verified against **Harness 0.1.5-rc.1**. Image payload transport is
 implemented, but model support is provider-dependent; the tested default
 `deepseek-v4-flash` rejects images. Harness does not report per-turn USD cost,
 and Claude's `/ultrareview` remains Claude-only. See

@@ -1,4 +1,4 @@
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, stat, symlink, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -415,6 +415,23 @@ describe("SQLite Kanban persistence", () => {
         authoritativeStore: "kanban.sqlite",
       });
       expect((await readdir(root)).filter((entry) => entry.startsWith("board.json.migration-"))).toHaveLength(1);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("keeps an authoritative migrated Board usable after its optional backup is removed", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "tarocub-kanban-backup-cleanup-"));
+    try {
+      const legacyPath = resolveBoardStorePath(root);
+      await writeFile(legacyPath, `${JSON.stringify(legacyBoardFixture(), null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+      await new BoardStore(root).listTasks();
+
+      const sentinel = JSON.parse(await readFile(legacyPath, "utf8")) as { backupFile: string };
+      await unlink(path.join(root, sentinel.backupFile));
+
+      await expect(new BoardStore(root).listTasks()).resolves.toHaveLength(2);
+      await expect(new BoardStore(root).diagnostics()).resolves.toMatchObject({ ok: true });
     } finally {
       await removeTempRoot(root);
     }

@@ -151,7 +151,7 @@ function classifyBoardError(error: unknown): BoardDomainError {
   if (/dependency cycle|parent cycle|unmet dependencies|cannot depend on itself|cannot be its own parent|unknown board plan dependency|parent and child|dependency tasks must belong/i.test(message)) {
     return new BoardDependencyConflictError(message, options);
   }
-  if (/already running|cannot be (?:started|marked ready|scheduled|promoted|blocked|unblocked|edited|reassigned|linked|deleted)|must be .* before (?:starting|claiming)|has no running run|is not in review|does not require review|cannot request review|cannot reopen review|is not archived|already archived|schedule is not due/i.test(message)) {
+  if (/already running|cannot be (?:started|completed|marked ready|scheduled|promoted|blocked|unblocked|edited|reassigned|linked|deleted)|must be .* before (?:starting|claiming)|has no running run|is not in review|does not require review|cannot request review|cannot reopen review|is not archived|already archived|schedule is not due/i.test(message)) {
     return new BoardInvalidTransitionError(message, options);
   }
   if (/SQLITE_|Kanban database|repository transaction|invalid board store state|schema version/i.test(message)) {

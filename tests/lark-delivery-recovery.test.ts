@@ -124,6 +124,42 @@ describe("redeliverRecoveredLarkObligations", () => {
     }
   });
 
+  it("uses the configured instance workspace when replaying artifacts", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-recover-custom-state-"));
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "cctb-recover-custom-workspace-"));
+    const imagePath = path.join(workspace, "report.png");
+    await writeFile(imagePath, "image bytes");
+    const uploadImage = vi.fn(async () => ({ image_key: "img_custom_workspace" }));
+    const channel = {
+      send: vi.fn(async () => ({ messageId: "m" })),
+      rawClient: {
+        im: { v1: { image: { create: uploadImage } } },
+      },
+    };
+    try {
+      await seed(stateDir, [{
+        id: "custom-workspace-image",
+        state: "attempting",
+        content: `[send-image:${imagePath}]`,
+      }]);
+
+      const result = await redeliverRecoveredLarkObligations({
+        channel,
+        stateDir,
+        workspaceOverride: workspace,
+        locale: "zh",
+      });
+
+      expect(result).toEqual({ recovered: 1, failed: 0, abandoned: 0 });
+      expect(uploadImage).toHaveBeenCalledTimes(1);
+      const rows = await readDeliveryObligations(stateDir);
+      expect(rows[0]!.state).toBe("delivered");
+    } finally {
+      await removeTempRoot(stateDir);
+      await removeTempRoot(workspace);
+    }
+  });
+
   it("abandons a previously failed reply with a missing artifact without replaying valid siblings", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-recover-terminal-"));
     const workspace = path.join(stateDir, "workspace");

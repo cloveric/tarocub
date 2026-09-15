@@ -297,10 +297,11 @@ single-choice fallback.
 Select DeepSeek in either channel with `/engine deepseek` (or use
 `telegram engine deepseek --instance <name>`). Install and authenticate `dsh`
 first; TaroCub resolves `DSH_EXECUTABLE` and otherwise uses `dsh` from `PATH`.
-The verified compatibility baseline is **DeepSeek Harness 0.1.2-rc.1**. This is
-also the npm `latest` version at the 2026-09-10 verification point. Newer alpha
-builds use breaking session and plugin APIs and are not a supported baseline
-until they receive a separate protocol probe.
+The verified compatibility baseline is **DeepSeek Harness 0.1.5-rc.1**. This is
+also the npm `latest` version at the 2026-09-15 verification point. TaroCub has
+live-verified the authenticated mux, session-v2 projections, command attachment
+schema migration, and a streamed model turn. The npm `next` prerelease remains
+outside the supported baseline until it receives the same protocol probes.
 
 Install the standalone native Harness bundle:
 
@@ -343,7 +344,7 @@ the verified capability and limitation matrix.
 ### Antigravity engine
 
 Select Antigravity with `/engine antigravity`. The verified baseline is
-**Antigravity CLI 1.2.1**. TaroCub uses native NDJSON `stream-json` input and
+**Antigravity CLI 1.2.2**. TaroCub uses native NDJSON `stream-json` input and
 output through one persistent worker per live conversation. Later turns reuse
 the warm process; idle workers are reaped after two hours, while a crash or a
 startup-setting change recreates the worker with the same authoritative
@@ -353,8 +354,8 @@ conversation is resumed. Unstructured stdout, a mismatched input echo, a missing
 or inconsistent conversation ID, or a missing final result fails closed rather
 than appearing in chat as an answer.
 
-Antigravity 1.2.1 retries transient model API errors and mid-stream
-interruptions in-process while preserving completed tool outputs. Its
+Antigravity 1.2.2 retains transient model API retries and mid-stream recovery
+in-process while preserving completed tool outputs. Its
 structured stream contract remains compatible with TaroCub.
 
 `/model <id>` passes a model listed by `agy models`, and `/effort` supports

@@ -93,6 +93,7 @@ describe("handleBoardTelegramCommand", () => {
       createdBy: { chatId: -100123, userId: 42, conversationKey: "chat:-100123" },
     });
     await store.addDependency("B2", "B1");
+    await store.startTask("B1");
 
     try {
       await expect(handleBoardTelegramCommand({

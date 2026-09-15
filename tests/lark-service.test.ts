@@ -15166,6 +15166,48 @@ describe("lark service", () => {
     void pending;
   });
 
+  it("re-renders a required multi-select instead of declining the whole Kimi form", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "kimi",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [{
+            question: "Which traits?",
+            header: "Traits",
+            multi_select: true,
+            required: true,
+            options: [{ label: "Fast" }, { label: "Safe" }],
+          }],
+        },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: {
+        chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: {
+          value: { cctb_lark: "ask_user_question", action: "form_submit", requestId },
+          form_value: { q0: [] },
+        },
+      },
+    });
+
+    expect(runtime.pendingApprovals.size).toBe(1);
+    const card = JSON.stringify((channel.send.mock.calls as unknown[][])
+      .map((call) => (call[1] as { card?: unknown })?.card)
+      .filter(Boolean)
+      .at(-1));
+    expect(card).toContain("请先选择");
+    expect(card).toContain("Traits");
+    void pending;
+  });
+
   it("parses a multi-select form value delivered as a JSON string", async () => {
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();

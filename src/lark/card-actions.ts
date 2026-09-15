@@ -61,6 +61,7 @@ type AskUserQuestionCardQuestion = {
   question: string;
   header: string;
   multiSelect: boolean;
+  required: boolean;
   options: AskUserQuestionOption[];
 };
 
@@ -602,6 +603,9 @@ function normalizeAskUserQuestions(toolInput: unknown): AskUserQuestionCardQuest
         // The live can_use_tool payload may snake_case the flag; accept both so
         // multi-select questions are not silently rendered as single-select.
         multiSelect: question.multiSelect === true || question.multi_select === true,
+        // Claude and legacy payloads require every answer. Kimi ACP form
+        // elicitation marks optional schema properties explicitly false.
+        required: question.required !== false,
         options,
       };
     })
@@ -1303,7 +1307,7 @@ export async function handleLarkCardAction(input: {
     });
 
     // Backstop for clients that don't enforce the form's `required`: a
-    // single-select question must have an answer.
+    // required question must have an answer, including a required multi-select.
     //
     // Re-prompting with a plain text message is NOT enough. The client holds a
     // post-submit lock on the card (the same lock settleThenUpdateManagedCard
@@ -1314,7 +1318,7 @@ export async function handleLarkCardAction(input: {
     // go through". So re-render the form IN PLACE, carrying the picks already
     // made so nothing has to be redone.
     const missingRequired = questions.filter(
-      (question) => !question.multiSelect && !(answers[question.question] ?? "").trim(),
+      (question) => question.required && !(answers[question.question] ?? "").trim(),
     );
     if (missingRequired.length > 0) {
       const names = missingRequired.map((question) => question.header).join(locale === "en" ? ", " : "、");

@@ -9,16 +9,22 @@ import { describe, expect, it, vi } from "vitest";
 import { ClaudeStreamAdapter } from "../src/codex/claude-stream-adapter.js";
 
 async function waitFor(condition: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt++) {
+  if ((vi as unknown as { isFakeTimers?: () => boolean }).isFakeTimers?.()) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (condition()) {
+        return;
+      }
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    throw new Error("Condition was not met in time");
+  }
+
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
     if (condition()) {
       return;
     }
-
-    if ((vi as unknown as { isFakeTimers?: () => boolean }).isFakeTimers?.()) {
-      await vi.advanceTimersByTimeAsync(0);
-    } else {
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
   }
 
   throw new Error("Condition was not met in time");

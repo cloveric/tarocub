@@ -178,9 +178,14 @@ export async function downloadLarkAttachments(input: {
     // Backstop for the (current) case where no size was advertised: the body is
     // already in memory, so refuse before it is persisted and handed downstream.
     assertLarkAttachmentDownloadable(attachment, body.length);
-    const fallbackName = attachment.fileName ?? `${attachment.kind}-${index + 1}${defaultExtension(attachment.kind)}`;
     const detectedImageType = attachment.kind === "image" ? detectImageMediaType(body) : null;
-    const fileName = detectedImageType ? normalizeImageFileName(fallbackName, detectedImageType) : fallbackName;
+    const fallbackExtension = attachment.kind === "image" && !detectedImageType
+      ? ".bin"
+      : defaultExtension(attachment.kind);
+    const fallbackName = attachment.fileName ?? `${attachment.kind}-${index + 1}${fallbackExtension}`;
+    const fileName = detectedImageType
+      ? normalizeImageFileName(fallbackName, detectedImageType)
+      : attachment.kind === "image" ? neutralizeUnknownImageFileName(fallbackName) : fallbackName;
     // A merged attachment burst downloads several messages' files into ONE
     // directory — same-named files (e.g. two cameras' IMG_001.jpg) would
     // silently overwrite each other. Suffix duplicates instead.
@@ -476,4 +481,12 @@ function defaultExtension(kind: LarkNormalizedAttachment["kind"]): string {
     case "file":
       return ".bin";
   }
+}
+
+function neutralizeUnknownImageFileName(fileName: string): string {
+  const extension = path.extname(fileName);
+  if (!/^\.(?:png|jpe?g|webp|gif)$/i.test(extension)) {
+    return fileName;
+  }
+  return `${fileName.slice(0, -extension.length) || "image"}.bin`;
 }

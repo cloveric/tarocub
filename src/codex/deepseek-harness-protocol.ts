@@ -125,6 +125,7 @@ interface RemoteMuxGeneration {
   mode: "remote";
   id: number;
   mux: WebSocket;
+  sessionCookie?: string;
   streams: Map<string, RemoteStreamRegistration>;
   follows: Map<string, RemoteFollowState>;
   settled: boolean;
@@ -486,22 +487,32 @@ export class DeepSeekHarnessProtocolClient {
   }
 
   private async postJson(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
-    await this.ensureAuthenticated(signal);
-    const timeoutSignal = AbortSignal.timeout(this.requestTimeoutMs);
-    const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-    const response = await this.fetchImpl(new URL(path, this.baseUrl), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(this.sessionCookie ? { cookie: this.sessionCookie } : {}),
-      },
-      body: JSON.stringify(body),
-      signal: requestSignal,
-    });
-    if (!response.ok) {
-      throw new Error(`DeepSeek Harness transport failure for ${path}: HTTP ${response.status}`);
+    const serializedBody = JSON.stringify(body);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await this.ensureAuthenticated(signal);
+      const cookie = this.sessionCookie;
+      const timeoutSignal = AbortSignal.timeout(this.requestTimeoutMs);
+      const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+      const response = await this.fetchImpl(new URL(path, this.baseUrl), {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(cookie ? { cookie } : {}),
+        },
+        body: serializedBody,
+        signal: requestSignal,
+      });
+      if (response.status === 401 && this.launchUrl && attempt === 0) {
+        await response.body?.cancel().catch(() => undefined);
+        this.invalidateSessionCookie(cookie);
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`DeepSeek Harness transport failure for ${path}: HTTP ${response.status}`);
+      }
+      return response;
     }
-    return response;
+    throw new Error(`DeepSeek Harness transport failure for ${path}: authentication retry exhausted`);
   }
 
   private async openGeneration(isReconnect: boolean): Promise<void> {
@@ -521,14 +532,16 @@ export class DeepSeekHarnessProtocolClient {
       return;
     }
     const id = ++this.generationId;
-    const websocketOptions = this.sessionCookie
-      ? { headers: { cookie: this.sessionCookie } }
+    const sessionCookie = this.sessionCookie;
+    const websocketOptions = sessionCookie
+      ? { headers: { cookie: sessionCookie } }
       : undefined;
     const mux = new WebSocket(this.downlinkUrl("/api/remote.mux"), websocketOptions);
     const generation: RemoteMuxGeneration = {
       mode: "remote",
       id,
       mux,
+      ...(sessionCookie ? { sessionCookie } : {}),
       streams: new Map(),
       follows: new Map(),
       settled: false,
@@ -630,6 +643,11 @@ export class DeepSeekHarnessProtocolClient {
     });
     generation.mux.once("error", (error) => failed(error));
     generation.mux.once("close", () => failed(new Error("DeepSeek Harness remote mux closed")));
+    generation.mux.once("unexpected-response", (request, response) => {
+      response.resume();
+      failed(new DeepSeekHarnessTransportError("/api/remote.mux", response.statusCode ?? 0));
+      request.destroy();
+    });
   }
 
   private openRemoteStream(
@@ -1145,6 +1163,9 @@ export class DeepSeekHarnessProtocolClient {
       return;
     }
     const generation = this.generation;
+    if (generation.mode === "remote" && isAuthenticationFailure(error)) {
+      this.invalidateSessionCookie(generation.sessionCookie);
+    }
     this.generation = undefined;
     if (generation.mode === "remote") {
       this.rejectRemoteFollows(generation, error);
@@ -1204,6 +1225,12 @@ export class DeepSeekHarnessProtocolClient {
     await this.authenticationPromise;
   }
 
+  private invalidateSessionCookie(cookie: string | undefined): void {
+    if (cookie && this.sessionCookie === cookie) {
+      this.sessionCookie = undefined;
+    }
+  }
+
   private async exchangeLaunchToken(signal?: AbortSignal): Promise<void> {
     const timeoutSignal = AbortSignal.timeout(this.requestTimeoutMs);
     const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
@@ -1231,6 +1258,20 @@ export class DeepSeekHarnessProtocolClient {
       // second unhandled exception on the transport loop.
     }
   }
+}
+
+class DeepSeekHarnessTransportError extends Error {
+  constructor(
+    public readonly path: string,
+    public readonly statusCode: number,
+  ) {
+    super(`DeepSeek Harness transport failure for ${path}: HTTP ${statusCode}`);
+    this.name = "DeepSeekHarnessTransportError";
+  }
+}
+
+function isAuthenticationFailure(error: Error): boolean {
+  return error instanceof DeepSeekHarnessTransportError && error.statusCode === 401;
 }
 
 function rawDataToString(data: RawData): string {

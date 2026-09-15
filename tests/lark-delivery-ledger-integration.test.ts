@@ -179,18 +179,14 @@ describe("Lark ordinary turn × delivery ledger", () => {
     }
   });
 
-  it("repairs a missing image path before sending and settles the obligation", async () => {
-    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-ledger-path-repair-"));
+  it("delivers valid siblings and keeps a mixed missing-artifact obligation failed", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-ledger-path-partial-"));
     const workspace = path.join(stateDir, "workspace");
     const coverPath = path.join(workspace, "cover.jpg");
-    const actualPagePath = path.join(workspace, "page-3.jpg");
     const typoPagePath = path.join(workspace, "page-3.png");
     await mkdir(workspace, { recursive: true });
     await writeFile(coverPath, "cover bytes");
-    await writeFile(actualPagePath, "page bytes");
-    const createImage = vi.fn()
-      .mockResolvedValueOnce({ image_key: "img_cover" })
-      .mockResolvedValueOnce({ image_key: "img_page" });
+    const createImage = vi.fn().mockResolvedValue({ image_key: "img_cover" });
     const channel = {
       send: vi.fn(async () => ({ messageId: "sent_1" })),
       stream: vi.fn(),
@@ -210,24 +206,9 @@ describe("Lark ordinary turn × delivery ledger", () => {
       }),
       "```",
     ].join("\n");
-    const repairedResponse = [
-      "images ready",
-      "```tool-call",
-      JSON.stringify({
-        name: "send.batch",
-        payload: { images: [coverPath, actualPagePath] },
-      }),
-      "```",
-    ].join("\n");
     const bridge = {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
-      handleAuthorizedMessage: vi.fn()
-        .mockResolvedValueOnce({ text: firstResponse })
-        .mockImplementationOnce(async (input: { text: string }) => {
-          expect(input.text).toContain("Delivery preflight retry");
-          expect(input.text).toContain(typoPagePath);
-          return { text: repairedResponse };
-        }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({ text: firstResponse }),
     };
     try {
       await handleLarkMessage({
@@ -250,14 +231,20 @@ describe("Lark ordinary turn × delivery ledger", () => {
         },
       });
 
-      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
-      expect(createImage).toHaveBeenCalledTimes(2);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(createImage).toHaveBeenCalledTimes(1);
       const sent = JSON.stringify(channel.send.mock.calls);
-      expect(sent).not.toContain("文件不存在");
+      expect(sent).toContain("img_cover");
+      expect(sent).toContain("文件不存在");
       const rows = await readDeliveryObligations(stateDir);
       expect(rows).toHaveLength(1);
-      expect(rows[0]!.state).toBe("delivered");
-      expect(rows[0]!.content).toBe(repairedResponse);
+      expect(rows[0]!.state).toBe("failed");
+      expect(rows[0]!.content).toBe(firstResponse);
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        outcome: "partial",
+      }));
     } finally {
       await removeTempRoot(stateDir);
     }

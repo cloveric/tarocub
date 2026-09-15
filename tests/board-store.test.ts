@@ -57,6 +57,7 @@ describe("BoardStore", () => {
         dependencies: ["B1"],
       });
 
+      await store.startTask(design.id);
       const result = await store.completeTask(design.id, "API design accepted");
 
       expect(result.promotedTaskIds).toEqual(["B2"]);
@@ -203,6 +204,66 @@ describe("BoardStore", () => {
           expect.objectContaining({ id: "R2", status: "done", summary: "worker shipped" }),
         ],
       });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("only completes a running task and preserves terminal state on repeated commands", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-store-"));
+
+    try {
+      const actor = { chatId: -100123, userId: 42, conversationKey: "chat:-100123" };
+      const store = new BoardStore(root);
+      await store.createTask({ title: "Review guarded work", createdBy: actor });
+      await store.setReviewGate("B1", { required: true, reviewer: "reviewer" });
+
+      await expect(store.completeTask("B1", "never started")).rejects.toThrow(
+        "cannot be completed from todo",
+      );
+      await expect(store.getTask("B1")).resolves.toMatchObject({ status: "todo", runs: [] });
+
+      await store.startTask("B1");
+      await store.completeTask("B1", "ready for review");
+      await store.approveTask("B1");
+      const approved = await store.getTask("B1");
+      const approvedEvents = await store.listEvents({ taskId: "B1" });
+
+      await expect(store.completeTask("B1", "duplicate command")).rejects.toThrow(
+        "cannot be completed from done",
+      );
+      expect(await store.getTask("B1")).toEqual(approved);
+      expect(await store.listEvents({ taskId: "B1" })).toEqual(approvedEvents);
+
+      await store.archiveTask("B1");
+      const archived = await store.getTask("B1");
+      await expect(store.completeTask("B1", "bypass archive")).rejects.toThrow(
+        "cannot be completed from archived",
+      );
+      expect(await store.getTask("B1")).toEqual(archived);
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("replays an idempotent completion after the task has left running", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-board-store-"));
+
+    try {
+      const store = new BoardStore(root);
+      await store.createTask({
+        title: "Idempotent completion",
+        createdBy: { chatId: -100123, userId: 42, conversationKey: "chat:-100123" },
+      });
+      await store.startTask("B1");
+
+      const first = await store.completeTask("B1", "finished", { idempotencyKey: "complete-B1" });
+      const repeated = await store.completeTask("B1", "ignored", { idempotencyKey: "complete-B1" });
+
+      expect(repeated).toEqual(first);
+      expect((await store.listEvents({ taskId: "B1" })).filter(
+        (event) => event.eventType === "task.run_completed",
+      )).toHaveLength(1);
     } finally {
       await removeTempRoot(root);
     }

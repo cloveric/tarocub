@@ -278,7 +278,22 @@ describe("lark card renderer", () => {
     const card = renderLarkRunCard(state);
     expect(countCardMarkdownTables(card)).toBe(LARK_CARD_TABLE_MAX);
     expect(JSON.stringify(card)).toContain("```text");
-    expect(liveRunCardStreamElement(state)?.rolling).toBe(true);
+    expect(liveRunCardStreamElement(state)?.rolling).toBe(false);
+  });
+
+  it("reserves the live table budget for answer tables before reasoning tables", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, {
+      type: "thinking",
+      text: "| reasoning | value |\n| --- | --- |\n| hidden-first | 1 |",
+    });
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: markdownTables(5) });
+
+    const card = renderLarkRunCard(state);
+    const serialized = JSON.stringify(card);
+    expect(countCardMarkdownTables(card)).toBe(LARK_CARD_TABLE_MAX);
+    expect(serialized).toContain("```text\\n| reasoning | value |");
+    expect(serialized).not.toContain("```text\\n| 指标 1 | 数值 |");
   });
 
   it("keeps table-constrained live markdown within the element byte ceiling", () => {
@@ -759,6 +774,19 @@ describe("lark card renderer", () => {
     expect(card).not.toContain("/Users/example");
   });
 
+  it("hides a partial citation prefix only while streaming", () => {
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, {
+      type: "assistant_text",
+      text: "Literal suffix :codex-file-",
+      delta: true,
+    });
+    expect(JSON.stringify(renderLarkRunCard(state, "en"))).not.toContain(":codex-file-");
+
+    state = applyLarkEngineEvent(state, { type: "result", text: "Literal suffix :codex-file-" });
+    expect(JSON.stringify(renderLarkRunCard(state, "en"))).toContain(":codex-file-");
+  });
+
   it("does not downgrade heading-like lines inside fenced code blocks", () => {
     expect(cleanCardText([
       "```markdown",
@@ -845,6 +873,16 @@ describe("lark card renderer", () => {
       "$20,000 \\text{ 万元} \\div 1,300 \\text{ 吨}$",
       "```",
     ].join("\n"));
+  });
+
+  it("preserves currency around Windows paths, escaped citations, and unknown TeX", () => {
+    const raw = [
+      "Price is $5, see C:\\Users\\foo\\report.txt for $10 more.",
+      "参考文献 \\[1\\] 和 \\[2\\]。",
+      "未知命令 $\\alpha + 1$ 保持原样。",
+    ].join("\n");
+
+    expect(cleanCardText(raw)).toBe(raw);
   });
 
   it("moves bold markers inside quotation marks so inline quotes render in Lark markdown", () => {
@@ -1140,6 +1178,19 @@ describe("long-answer continuation cards", () => {
     expect(chunks[1]).toContain("| 指标 6 | 数值 |");
     expect(chunks[1]).toContain("| --- | --- |");
     expect(chunks[1]).toContain("row-6");
+  });
+
+  it("counts GFM tables whose delimiter cells use one or two hyphens", () => {
+    const text = Array.from({ length: 6 }, (_, index) => [
+      `| 指标 ${index + 1} | 数值 |`,
+      "| :-: | -- |",
+      `| row-${index + 1} | ${index + 1} |`,
+    ].join("\n")).join("\n\n");
+    const chunks = splitLarkAnswerIntoCardChunks(text);
+
+    expect(countLarkMarkdownTables(text)).toBe(6);
+    expect(chunks).toHaveLength(2);
+    expect(chunks.join("\n")).toBe(text);
   });
 
   it("moves the sixth table's section heading onto its continuation card", () => {

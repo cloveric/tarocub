@@ -38,7 +38,17 @@ describe("renderCodexFileCitations", () => {
     const input = 'Answer\n:codex-file-citation{path="/Users/example/private/report.xlsx"';
 
     expect(renderCodexFileCitations(input, "en")).toBe("Answer\n");
-    expect(renderCodexFileCitations("Answer :codex-file-", "en")).toBe("Answer ");
+    expect(renderCodexFileCitations("Answer :codex-file-", "en", { streaming: true })).toBe("Answer ");
+    expect(renderCodexFileCitations("Answer :codex-file-", "en")).toBe("Answer :codex-file-");
+  });
+
+  it("leaves citation examples inside fenced code unchanged", () => {
+    const citation = ':codex-file-citation{path="/Users/example/private/report.xlsx"}';
+    const input = `\`\`\`text\n${citation}\n\`\`\`\nOutside ${citation}`;
+
+    expect(renderCodexFileCitations(input, "en")).toBe(
+      `\`\`\`text\n${citation}\n\`\`\`\nOutside (Source: \`report.xlsx\`)`,
+    );
   });
 
   it("fails closed for malformed tokens instead of exposing their body", () => {

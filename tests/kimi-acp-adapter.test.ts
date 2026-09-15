@@ -2887,8 +2887,9 @@ describe("KimiAcpAdapter", () => {
         }),
       });
       expect(completed.status).toBe(202);
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      await waitFor(() => events.some((event) => event.type === "task_notification"));
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-real-output"
+      )));
 
       expect(events).toContainEqual(expect.objectContaining({
         type: "task_notification",
@@ -2897,7 +2898,7 @@ describe("KimiAcpAdapter", () => {
         text: `build passed\n12 tests passed\nsaved ${generatedImage}\n[send-image:${generatedImage}]`,
       }));
 
-      await fetch(hookUrl!, {
+      const failedStarted = await fetch(hookUrl!, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -2909,6 +2910,10 @@ describe("KimiAcpAdapter", () => {
           detached: true,
         }),
       });
+      expect(failedStarted.status).toBe(202);
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-failed-artifact"
+      )));
       const failedOutputDir = path.join(
         root,
         "sessions",
@@ -2921,7 +2926,7 @@ describe("KimiAcpAdapter", () => {
       );
       await mkdir(failedOutputDir, { recursive: true });
       await writeFile(path.join(failedOutputDir, "output.log"), `saved ${generatedImage}\n`, "utf8");
-      await fetch(hookUrl!, {
+      const failed = await fetch(hookUrl!, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -2933,7 +2938,10 @@ describe("KimiAcpAdapter", () => {
           body: "Chart generation failed.",
         }),
       });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(failed.status).toBe(202);
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-failed-artifact"
+      )));
       const failedNotification = events.find((event) => (
         event.type === "task_notification" && event.taskId === "bash-failed-artifact"
       ));
@@ -2943,7 +2951,7 @@ describe("KimiAcpAdapter", () => {
       });
       expect(failedNotification).not.toMatchObject({ text: expect.stringContaining("[send-image:") });
 
-      await fetch(hookUrl!, {
+      const escapedStarted = await fetch(hookUrl!, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -2955,6 +2963,10 @@ describe("KimiAcpAdapter", () => {
           detached: true,
         }),
       });
+      expect(escapedStarted.status).toBe(202);
+      await waitFor(() => events.some((event) => (
+        event.type === "background_task_started" && event.taskId === "bash-escaped-output"
+      )));
       const escapedOutputDir = path.join(
         root,
         "sessions",
@@ -2969,7 +2981,7 @@ describe("KimiAcpAdapter", () => {
       await writeFile(outsideSecret, "DO_NOT_LEAK", "utf8");
       await mkdir(escapedOutputDir, { recursive: true });
       await symlink(outsideSecret, path.join(escapedOutputDir, "output.log"));
-      await fetch(hookUrl!, {
+      const escaped = await fetch(hookUrl!, {
         method: "POST",
         headers,
         body: JSON.stringify({
@@ -2981,7 +2993,10 @@ describe("KimiAcpAdapter", () => {
           body: "Safe completion summary.",
         }),
       });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(escaped.status).toBe(202);
+      await waitFor(() => events.some((event) => (
+        event.type === "task_notification" && event.taskId === "bash-escaped-output"
+      )));
       const escapedNotification = events.find((event) => (
         event.type === "task_notification" && event.taskId === "bash-escaped-output"
       ));
@@ -5909,6 +5924,7 @@ describe("KimiAcpAdapter", () => {
                 question: "Which colour?",
                 header: "Colour",
                 multi_select: false,
+                required: true,
                 options: [
                   { label: "Red", description: "Warm" },
                   { label: "Blue", description: "Cool" },
@@ -5918,6 +5934,7 @@ describe("KimiAcpAdapter", () => {
                 question: "Which traits?",
                 header: "Traits",
                 multi_select: true,
+                required: true,
                 options: [
                   { label: "Fast" },
                   { label: "Safe, stable" },
@@ -5998,6 +6015,74 @@ describe("KimiAcpAdapter", () => {
     });
     server.respondPrompt();
     await expect(turn).resolves.toMatchObject({ text: "answers received" });
+    adapter.destroy();
+  });
+
+  it("accepts a Kimi form when an optional multi-select with minItems is omitted", async () => {
+    const harness = createHarness();
+    const adapter = new KimiAcpAdapter("kimi", adapterOptions(harness));
+    const turn = adapter.sendUserMessage("telegram-optional-elicitation", {
+      text: "ask with an optional field",
+      files: [],
+      onApprovalRequest: async (request) => {
+        expect(request.toolInput).toMatchObject({
+          questions: [
+            expect.objectContaining({ question: "Choose a colour", required: true }),
+            expect.objectContaining({ question: "Optional traits", required: false, multi_select: true }),
+          ],
+        });
+        return {
+          behavior: "allow",
+          updatedInput: { answers: { "Choose a colour": "Blue" } },
+        };
+      },
+    });
+    await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+    const server = harness.children[0].server;
+    server.sendUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "elicitation-optional-1",
+      title: "AskUserQuestion",
+      kind: "other",
+      status: "pending",
+      rawInput: {
+        questions: [
+          { question: "Choose a colour", header: "Colour" },
+          { question: "Optional traits", header: "Traits", multi_select: true },
+        ],
+      },
+    });
+    const requestId = server.requestClient("elicitation/create", {
+      mode: "form",
+      sessionId: server.sessionId,
+      toolCallId: "elicitation-optional-1",
+      message: "Choose a colour; traits are optional.",
+      requestedSchema: {
+        type: "object",
+        required: ["q0"],
+        properties: {
+          q0: { type: "string", title: "Choose a colour", enum: ["Red", "Blue"] },
+          q1: {
+            type: "array",
+            title: "Optional traits",
+            minItems: 1,
+            items: { type: "string", enum: ["Fast", "Safe"] },
+          },
+        },
+      },
+    });
+    await waitFor(() => server.clientResponses.has(requestId));
+    expect(server.clientResponses.get(requestId)?.error).toBeUndefined();
+    expect(server.clientResponses.get(requestId)?.result).toEqual({
+      action: "accept",
+      content: { q0: "Blue" },
+    });
+    server.sendUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "optional answer accepted" },
+    });
+    server.respondPrompt();
+    await expect(turn).resolves.toMatchObject({ text: "optional answer accepted" });
     adapter.destroy();
   });
 

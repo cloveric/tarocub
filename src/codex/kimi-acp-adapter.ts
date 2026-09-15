@@ -1379,6 +1379,7 @@ function normalizeKimiElicitationForm(
     question: string;
     header: string;
     multi_select: boolean;
+    required: boolean;
     options: Array<{ label: string; description?: string }>;
   }> = [];
   const fields: KimiElicitationField[] = [];
@@ -1419,6 +1420,7 @@ function normalizeKimiElicitationForm(
       question: answerKey,
       header,
       multi_select: multiSelect,
+      required: required.has(key),
       options: options.map((option) => ({
         label: option.label,
         ...(option.description ? { description: option.description } : {}),
@@ -1526,7 +1528,7 @@ function renderElicitationResponse(
   for (const field of form.fields) {
     const rawAnswer = answers[field.answerKey] ?? answers[field.key];
     if (rawAnswer === undefined || rawAnswer === null || rawAnswer === "") {
-      if (field.required || (field.minItems ?? 0) > 0) {
+      if (field.required) {
         return { action: "decline" };
       }
       continue;

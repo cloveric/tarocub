@@ -254,6 +254,31 @@ describe("DeepSeekHarnessProtocolClient", () => {
     await client.close();
   });
 
+  it("exchanges the launch token again and retries one HTTP request after a cookie 401", async () => {
+    const server = new ProtocolServer();
+    servers.push(server);
+    const baseUrl = await server.listen();
+    const launchToken = "rotating-launch-token";
+    const firstCookie = "dsh_browser_session=first-cookie";
+    const secondCookie = "dsh_browser_session=second-cookie";
+    server.requireAuthentication(launchToken, firstCookie);
+    const client = new DeepSeekHarnessProtocolClient(`${baseUrl}/?token=${launchToken}`);
+
+    await client.connect({ onMuxFrame: () => {}, onHostFrame: () => {} });
+    server.requireAuthentication(launchToken, secondCookie);
+
+    await expect(client.request("session.list", {})).resolves.toEqual({});
+    expect(server.authenticationRequests).toEqual([
+      `/?token=${launchToken}`,
+      `/?token=${launchToken}`,
+    ]);
+    expect(server.requests).toEqual([
+      expect.objectContaining({ path: "/api/session/list", cookie: secondCookie }),
+    ]);
+
+    await client.close();
+  });
+
   it("projects the modern model catalog and per-session selection into the legacy adapter contract", async () => {
     const server = new ProtocolServer();
     servers.push(server);
@@ -618,6 +643,33 @@ describe("DeepSeekHarnessProtocolClient", () => {
     expect(server.remoteMessages.filter((message) => message.endpoint === "$events")).toHaveLength(2);
     expect(server.remoteMessages.filter((message) => message.endpoint === "session/control")).toHaveLength(2);
     expect(server.remoteMessages.filter((message) => message.endpoint === "session/follow")).toHaveLength(2);
+
+    await client.close();
+  });
+
+  it("re-authenticates a modern mux after its session cookie is rejected", async () => {
+    const server = new ProtocolServer();
+    servers.push(server);
+    const baseUrl = await server.listen();
+    const launchToken = "reconnect-launch-token";
+    server.requireAuthentication(launchToken, "dsh_browser_session=expired-cookie");
+    const onReconnect = vi.fn();
+    const client = new DeepSeekHarnessProtocolClient(`${baseUrl}/?token=${launchToken}`, {
+      reconnectInitialDelayMs: 1,
+      reconnectMaxDelayMs: 1,
+    });
+
+    await client.connect({ onMuxFrame: () => {}, onHostFrame: () => {}, onReconnect });
+    await server.waitForSockets();
+    server.requireAuthentication(launchToken, "dsh_browser_session=fresh-cookie");
+    server.sockets.get("/api/remote.mux")!.terminate();
+
+    await server.waitForConnectionCount("/api/remote.mux", 2);
+    await vi.waitFor(() => expect(onReconnect).toHaveBeenCalledTimes(1));
+    expect(server.authenticationRequests).toEqual([
+      `/?token=${launchToken}`,
+      `/?token=${launchToken}`,
+    ]);
 
     await client.close();
   });

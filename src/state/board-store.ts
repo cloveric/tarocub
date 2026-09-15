@@ -4048,6 +4048,13 @@ export class BoardStore {
         return { task: cloneTask(task), promotedTaskIds };
       }
       requireExpectedRevision(task.revision, options.expectedRevision, `board task ${normalizedId}`);
+      if (task.status !== "running") {
+        throw new Error(`board task ${normalizedId} cannot be completed from ${task.status}`);
+      }
+      const activeRun = [...task.runs].reverse().find((run) => run.status === "running");
+      if (!activeRun) {
+        throw new Error(`board task ${normalizedId} has no running run`);
+      }
       const shouldReview = task.review.required;
       const normalizedSummary = normalizeBoardSummary(summary);
       task.status = shouldReview ? "review" : "done";
@@ -4061,13 +4068,10 @@ export class BoardStore {
         task.summary = normalizedSummary;
       }
       delete task.blockedReason;
-      const activeRun = [...task.runs].reverse().find((run) => run.status === "running");
-      if (activeRun) {
-        activeRun.status = shouldReview ? "review_requested" : "done";
-        activeRun.completedAt = timestamp;
-        if (task.summary) {
-          activeRun.summary = task.summary;
-        }
+      activeRun.status = shouldReview ? "review_requested" : "done";
+      activeRun.completedAt = timestamp;
+      if (task.summary) {
+        activeRun.summary = task.summary;
       }
 
       const promotedTaskIds = shouldReview ? [] : promoteDependents(state, normalizedId, timestamp);
@@ -4081,7 +4085,7 @@ export class BoardStore {
       await this.appendEvent({
         boardSlug: task.boardSlug,
         taskId: task.id,
-        ...(activeRun ? { runId: activeRun.id } : {}),
+        runId: activeRun.id,
         eventType: "task.run_completed",
         actor: options.actor,
         payload: {

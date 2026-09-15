@@ -13,25 +13,61 @@ const PARTIAL_MARKER_MIN_LENGTH = ":codex-".length;
 export function renderCodexFileCitations(
   text: string,
   locale: CitationLocale = "en",
+  options: { streaming?: boolean } = {},
 ): string {
-  if (!text.includes(":codex-file")) {
+  if (!text.includes(":codex-")) {
     return text;
   }
 
   let output = "";
   let cursor = 0;
+  let fence: { marker: string; length: number } | undefined;
+  while (cursor < text.length) {
+    const newline = text.indexOf("\n", cursor);
+    const lineEnd = newline === -1 ? text.length : newline;
+    const line = text.slice(cursor, lineEnd);
+    const match = /^(?:\s{0,3}>\s?)*\s{0,3}(`{3,}|~{3,})(.*)$/u.exec(line.replace(/\r$/u, ""));
+    if (fence) {
+      output += line;
+      if (
+        match
+        && match[1]![0] === fence.marker
+        && match[1]!.length >= fence.length
+        && !match[2]!.trim()
+      ) {
+        fence = undefined;
+      }
+    } else if (match) {
+      output += line;
+      fence = { marker: match[1]![0]!, length: match[1]!.length };
+    } else {
+      output += renderCitationProse(line, locale, options.streaming === true);
+    }
+    if (newline === -1) {
+      break;
+    }
+    output += "\n";
+    cursor = newline + 1;
+  }
+
+  return output;
+}
+
+function renderCitationProse(text: string, locale: CitationLocale, streaming: boolean): string {
+  let output = "";
+  let cursor = 0;
   while (cursor < text.length) {
     const markerStart = text.indexOf(CODEX_FILE_CITATION_MARKER, cursor);
     if (markerStart === -1) {
-      output += stripTrailingPartialMarker(text.slice(cursor));
+      output += streaming ? stripTrailingPartialMarker(text.slice(cursor)) : text.slice(cursor);
       break;
     }
 
     output += text.slice(cursor, markerStart);
     const markerEnd = findCitationEnd(text, markerStart + CODEX_FILE_CITATION_MARKER.length);
     if (markerEnd === -1) {
-      // Streaming can stop midway through the token. Hide the unfinished
-      // suffix until a later card update supplies the closing brace.
+      // Streaming can stop midway through the token. Final output also hides
+      // an unfinished full token because its suffix may contain a local path.
       break;
     }
 
