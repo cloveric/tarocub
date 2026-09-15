@@ -3,12 +3,16 @@ import path from "node:path";
 export type CitationLocale = "en" | "zh";
 
 const CODEX_FILE_CITATION_MARKER = ":codex-file-citation{";
+const CODEX_FOLLOWUP_MARKER = ":codex-followup[";
+const CODEX_UI_MARKERS = [CODEX_FILE_CITATION_MARKER, CODEX_FOLLOWUP_MARKER] as const;
 const PARTIAL_MARKER_MIN_LENGTH = ":codex-".length;
 
 /**
- * Convert Codex's UI-only file citation tokens into channel-safe prose.
+ * Convert Codex's UI-only annotation tokens into channel-safe prose.
  * Absolute source paths are intentionally reduced to a basename: a citation
  * is provenance, not an instruction to upload the referenced local file.
+ * Follow-up chips keep only their visible label because remote channels cannot
+ * render the Codex Desktop action or safely preserve its hidden prompt.
  */
 export function renderCodexFileCitations(
   text: string,
@@ -41,7 +45,7 @@ export function renderCodexFileCitations(
       output += line;
       fence = { marker: match[1]![0]!, length: match[1]!.length };
     } else {
-      output += renderCitationProse(line, locale, options.streaming === true);
+      output += renderCodexAnnotationProse(line, locale, options.streaming === true);
     }
     if (newline === -1) {
       break;
@@ -53,17 +57,42 @@ export function renderCodexFileCitations(
   return output;
 }
 
-function renderCitationProse(text: string, locale: CitationLocale, streaming: boolean): string {
+function renderCodexAnnotationProse(text: string, locale: CitationLocale, streaming: boolean): string {
   let output = "";
   let cursor = 0;
   while (cursor < text.length) {
-    const markerStart = text.indexOf(CODEX_FILE_CITATION_MARKER, cursor);
-    if (markerStart === -1) {
+    const citationStart = text.indexOf(CODEX_FILE_CITATION_MARKER, cursor);
+    const followupStart = text.indexOf(CODEX_FOLLOWUP_MARKER, cursor);
+    const markerStart = earliestMarkerStart(citationStart, followupStart);
+    if (markerStart < 0) {
       output += streaming ? stripTrailingPartialMarker(text.slice(cursor)) : text.slice(cursor);
       break;
     }
 
     output += text.slice(cursor, markerStart);
+    if (markerStart === followupStart) {
+      const labelStart = markerStart + CODEX_FOLLOWUP_MARKER.length;
+      const labelEnd = findFollowupLabelEnd(text, labelStart);
+      if (labelEnd === -1) {
+        break;
+      }
+      const label = sanitizeFollowupLabel(text.slice(labelStart, labelEnd));
+      const bodyStart = labelEnd + 1;
+      if (text[bodyStart] !== "{") {
+        output += label || unavailableFollowup(locale);
+        cursor = bodyStart;
+        continue;
+      }
+      const markerEnd = findCitationEnd(text, bodyStart + 1);
+      output += label || unavailableFollowup(locale);
+      if (markerEnd === -1) {
+        // Never expose the hidden prompt from a truncated desktop annotation.
+        break;
+      }
+      cursor = markerEnd + 1;
+      continue;
+    }
+
     const markerEnd = findCitationEnd(text, markerStart + CODEX_FILE_CITATION_MARKER.length);
     if (markerEnd === -1) {
       // Streaming can stop midway through the token. Final output also hides
@@ -77,6 +106,35 @@ function renderCitationProse(text: string, locale: CitationLocale, streaming: bo
   }
 
   return output;
+}
+
+function earliestMarkerStart(...starts: number[]): number {
+  const present = starts.filter((start) => start >= 0);
+  return present.length > 0 ? Math.min(...present) : -1;
+}
+
+function findFollowupLabelEnd(text: string, start: number): number {
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+    } else if (char === "\\") {
+      escaped = true;
+    } else if (char === "]") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function sanitizeFollowupLabel(value: string): string {
+  const decoded = value.replace(/\\([\\\]])/gu, "$1");
+  return Array.from(decoded.replace(/[\u0000-\u001f\u007f]+/gu, " ").trim()).slice(0, 240).join("");
+}
+
+function unavailableFollowup(locale: CitationLocale): string {
+  return locale === "zh" ? "（后续建议不可用）" : "(Follow-up unavailable)";
 }
 
 function findCitationEnd(text: string, start: number): number {
@@ -185,10 +243,12 @@ function sanitizeInlineCode(value: string | undefined): string {
 }
 
 function stripTrailingPartialMarker(text: string): string {
-  const maxLength = Math.min(CODEX_FILE_CITATION_MARKER.length - 1, text.length);
-  for (let length = maxLength; length >= PARTIAL_MARKER_MIN_LENGTH; length -= 1) {
-    if (text.endsWith(CODEX_FILE_CITATION_MARKER.slice(0, length))) {
-      return text.slice(0, -length);
+  for (const marker of CODEX_UI_MARKERS) {
+    const maxLength = Math.min(marker.length - 1, text.length);
+    for (let length = maxLength; length >= PARTIAL_MARKER_MIN_LENGTH; length -= 1) {
+      if (text.endsWith(marker.slice(0, length))) {
+        return text.slice(0, -length);
+      }
     }
   }
   return text;

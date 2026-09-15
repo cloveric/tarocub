@@ -59,6 +59,30 @@ describe("deliverTelegramResponse", () => {
     }
   });
 
+  it("renders Codex follow-up chips without exposing their hidden prompts", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-codex-followup-"));
+    const inboxDir = path.join(root, "instance", "inbox");
+    const followup = '- :codex-followup[按税种汇总]{prompt="请把三家公司的税款按税种分类汇总"}';
+    const api = {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 1 }),
+      sendDocument: vi.fn().mockResolvedValue({ message_id: 2 }),
+      sendPhoto: vi.fn().mockResolvedValue({ message_id: 3 }),
+      sendVoice: vi.fn().mockResolvedValue({ message_id: 4 }),
+    };
+
+    try {
+      await deliverTelegramResponse(api as never, 123, followup, inboxDir, undefined, undefined, "zh");
+
+      const delivered = JSON.stringify(api.sendMessage.mock.calls);
+      expect(delivered).toContain("按税种汇总");
+      expect(delivered).not.toContain(":codex-followup");
+      expect(delivered).not.toContain("prompt=");
+      expect(delivered).not.toContain("请把三家公司");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it("sends cleaned text plus workspace files referenced via send-file tags", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-response-"));
     const realRoot = await realpath(root);

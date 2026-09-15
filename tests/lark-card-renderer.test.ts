@@ -760,6 +760,19 @@ describe("lark card renderer", () => {
     expect(done).not.toContain("/Users/example");
   });
 
+  it("renders Codex follow-up chips as plain list labels", () => {
+    const followup = '- :codex-followup[按税种汇总]{prompt="请把三家公司的税款按税种分类汇总"}';
+    let state = initialLarkRunState("lark:oc_chat");
+    state = applyLarkEngineEvent(state, { type: "assistant_text", text: followup });
+    state = applyLarkEngineEvent(state, { type: "result", text: followup });
+
+    const card = JSON.stringify(renderLarkRunCard(state, "zh"));
+    expect(card).toContain("按税种汇总");
+    expect(card).not.toContain(":codex-followup");
+    expect(card).not.toContain("prompt=");
+    expect(card).not.toContain("请把三家公司");
+  });
+
   it("does not expose an incomplete Codex citation during a streaming card update", () => {
     let state = initialLarkRunState("lark:oc_chat");
     state = applyLarkEngineEvent(state, {

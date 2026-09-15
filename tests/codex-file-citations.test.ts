@@ -51,6 +51,33 @@ describe("renderCodexFileCitations", () => {
     );
   });
 
+  it("renders Codex Desktop follow-up chips as channel-safe visible labels", () => {
+    const input = [
+      "可继续处理：",
+      '- :codex-followup[按税种汇总]{prompt="请按增值税、所得税和附加税费汇总"}',
+      '- :codex-followup[计算综合税负率]{prompt="请计算并比较三家公司\\"综合\\"税负率"}',
+    ].join("\n");
+
+    const rendered = renderCodexFileCitations(input, "zh");
+
+    expect(rendered).toBe("可继续处理：\n- 按税种汇总\n- 计算综合税负率");
+    expect(rendered).not.toContain(":codex-followup");
+    expect(rendered).not.toContain("prompt=");
+    expect(rendered).not.toContain("请按增值税");
+  });
+
+  it("hides incomplete follow-up annotations and preserves fenced examples", () => {
+    const complete = ':codex-followup[制作汇总表]{prompt="生成 Excel 汇总表"}';
+    const input = `\`\`\`text\n${complete}\n\`\`\`\nOutside ${complete}`;
+
+    expect(renderCodexFileCitations(input, "en")).toBe(
+      `\`\`\`text\n${complete}\n\`\`\`\nOutside 制作汇总表`,
+    );
+    expect(renderCodexFileCitations("Next: :codex-follo", "en", { streaming: true })).toBe("Next: ");
+    expect(renderCodexFileCitations('Next: :codex-followup[Safe label]{prompt="hidden', "en"))
+      .toBe("Next: Safe label");
+  });
+
   it("fails closed for malformed tokens instead of exposing their body", () => {
     const input = ":codex-file-citation{path=/Users/example/private/report.xlsx}";
 
