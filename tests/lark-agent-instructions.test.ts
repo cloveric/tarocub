@@ -273,7 +273,7 @@ describe("larkAgentInstructions", () => {
     const instructions = larkAgentInstructions();
 
     expect(instructions).toContain("```tool-call");
-    expect(instructions).toContain('{"name":"send.batch","payload":{"images":[{"path":"/workspace/p1.png","caption":"P1"}]}}');
+    expect(instructions).toContain('{"name":"send.batch","payload":{"files":["/workspace/report.pdf"]}}');
     expect(instructions).toContain("Never emit `[send.batch=...]`");
   });
 

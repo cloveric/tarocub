@@ -804,7 +804,7 @@ function canonicalPathKey(filePath: string): string {
 
 function renderInvalidLarkToolPayload(
   toolName: string,
-  reason: "requires_path" | "string_array" | "image_entries",
+  reason: "requires_path" | "string_array" | "file_entries" | "image_entries",
   locale: Locale,
   field?: string,
 ): string {
@@ -815,6 +815,9 @@ function renderInvalidLarkToolPayload(
     if (reason === "image_entries") {
       return `Invalid Lark tool payload: ${toolName} images must be path strings or {path, caption} objects.`;
     }
+    if (reason === "file_entries") {
+      return `Invalid Lark tool payload: ${toolName} files must be path strings or {path, caption} objects.`;
+    }
     return `Invalid Lark tool payload: ${toolName} ${field ?? "field"} must be an array of strings.`;
   }
   if (reason === "requires_path") {
@@ -822,6 +825,9 @@ function renderInvalidLarkToolPayload(
   }
   if (reason === "image_entries") {
     return `错误：飞书工具参数无效：${toolName} images 必须是路径字符串或 {path, caption} 对象。`;
+  }
+  if (reason === "file_entries") {
+    return `错误：飞书工具参数无效：${toolName} files 必须是路径字符串或 {path, caption} 对象。`;
   }
   return `错误：飞书工具参数无效：${toolName} ${field ?? "字段"} 必须是字符串数组。`;
 }

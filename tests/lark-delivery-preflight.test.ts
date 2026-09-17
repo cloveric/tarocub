@@ -13,4 +13,29 @@ describe("Lark delivery preflight", () => {
       expect(result.artifacts).toHaveLength(21);
     }
   });
+
+  it("accepts Kimi captioned file entries while preserving strict path validation", () => {
+    const result = normalizeLarkSendTool("send.batch", {
+      files: [
+        { path: "/workspace/report.md", caption: "Report MD" },
+        { path: "/workspace/report.html", caption: "Report HTML" },
+        { path: "/workspace/report.pdf", caption: "Report PDF" },
+      ],
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      artifacts: [
+        { path: "/workspace/report.md", kind: "file" },
+        { path: "/workspace/report.html", kind: "file" },
+        { path: "/workspace/report.pdf", kind: "file" },
+      ],
+      message: "",
+    });
+    expect(normalizeLarkSendTool("send.batch", { files: [123] })).toEqual({
+      ok: false,
+      reason: "file_entries",
+      field: "files",
+    });
+  });
 });

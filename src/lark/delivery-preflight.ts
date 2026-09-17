@@ -64,7 +64,7 @@ export type NormalizedLarkSendTool =
     }
   | {
       ok: false;
-      reason: "requires_path" | "string_array" | "image_entries";
+      reason: "requires_path" | "string_array" | "file_entries" | "image_entries";
       field?: string;
     };
 
@@ -103,11 +103,15 @@ export function normalizeLarkSendTool(name: LarkSendToolName, payload: unknown):
     };
   }
 
-  const invalidField = invalidStringArrayField(record, ["files", "audios", "videos"]);
+  const invalidField = invalidStringArrayField(record, ["audios", "videos"]);
   if (invalidField) {
     return { ok: false, reason: "string_array", field: invalidField };
   }
-  const imageEntries = normalizeLarkBatchImages(record?.images);
+  const fileEntries = normalizeLarkBatchPathEntries(record?.files);
+  if (fileEntries === null) {
+    return { ok: false, reason: "file_entries", field: "files" };
+  }
+  const imageEntries = normalizeLarkBatchPathEntries(record?.images);
   if (imageEntries === null) {
     return { ok: false, reason: "image_entries", field: "images" };
   }
@@ -117,8 +121,8 @@ export function normalizeLarkSendTool(name: LarkSendToolName, payload: unknown):
     kind: "image",
     ...(image.caption ? { caption: image.caption } : {}),
   }));
-  for (const filePath of stringArray(record?.files)) {
-    artifacts.push({ path: filePath, kind: "file" });
+  for (const file of fileEntries) {
+    artifacts.push({ path: file.path, kind: "file" });
   }
   for (const filePath of stringArray(record?.audios)) {
     artifacts.push({ path: filePath, kind: "audio" });
@@ -261,7 +265,7 @@ export async function preflightLarkDeliveryPath(
   }
 }
 
-function normalizeLarkBatchImages(value: unknown): Array<{ path: string; caption?: string }> | null {
+function normalizeLarkBatchPathEntries(value: unknown): Array<{ path: string; caption?: string }> | null {
   if (value === undefined || value === null) {
     return [];
   }

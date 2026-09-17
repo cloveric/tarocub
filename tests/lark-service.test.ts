@@ -10837,6 +10837,50 @@ describe("lark service", () => {
     }
   });
 
+  it("delivers Kimi send.batch files given as {path, caption} objects", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-kimi-captioned-files-"));
+    const outputDir = path.join(stateDir, "workspace");
+    const paths = ["report.md", "report.html", "report.pdf"].map((name) => path.join(outputDir, name));
+    await mkdir(outputDir, { recursive: true });
+    await Promise.all(paths.map(async (filePath) => await writeFile(filePath, path.basename(filePath))));
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: [
+          "```tool-call",
+          JSON.stringify({
+            name: "send.batch",
+            payload: {
+              files: paths.map((filePath) => ({ path: filePath, caption: path.basename(filePath) })),
+            },
+          }),
+          "```",
+        ].join("\n"),
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_kimi_captioned_files", content: "send reports" }),
+      });
+
+      for (const filePath of paths) {
+        expect(channel.send).toHaveBeenCalledWith(
+          "oc_chat",
+          { file: { source: Buffer.from(path.basename(filePath)), fileName: path.basename(filePath) } },
+          { replyTo: "om_kimi_captioned_files" },
+        );
+      }
+      expect(JSON.stringify(channel.send.mock.calls)).not.toContain("飞书工具参数无效");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("renders send.batch images given as {path, caption} objects in ONE grouped card", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-batch-caption-"));
     const outputDir = path.join(stateDir, "workspace", "out");
@@ -11141,7 +11185,7 @@ describe("lark service", () => {
       expect(rendered).not.toContain("Batch ready.");
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { text: "错误：飞书工具参数无效：send.batch files 必须是字符串数组。" },
+        { text: "错误：飞书工具参数无效：send.batch files 必须是路径字符串或 {path, caption} 对象。" },
         { replyTo: "om_invalid_send_batch" },
       );
     } finally {
