@@ -2125,9 +2125,20 @@ function isLarkCommentTimelineEvent(event: TimelineEvent): boolean {
   return event.metadata?.larkSurface === "comment";
 }
 
+function isLarkCardActionTimelineEvent(event: TimelineEvent): boolean {
+  return event.metadata?.source === "card_action"
+    && typeof event.metadata.action === "string";
+}
+
 function getLarkTimelineCommentPairingKey(event: TimelineEvent): string {
   const commentId = event.metadata?.commentId;
   return `${event.conversationKey ?? ""}\0${typeof commentId === "string" ? commentId : ""}`;
+}
+
+function getLarkTimelineCardActionPairingKey(event: TimelineEvent): string {
+  const messageId = getLarkTimelineMessageId(event) ?? "";
+  const action = event.metadata?.action;
+  return `${event.conversationKey ?? ""}\0${messageId}\0${typeof action === "string" ? action : ""}`;
 }
 
 function removePendingLarkTimelineEvent(
@@ -2246,6 +2257,10 @@ async function readLarkPendingTurnActivity(
   const pendingByConversationKey = new Map<string, TimelineEvent[]>();
   const pendingCronRunsByJobId = new Map<string, TimelineEvent[]>();
   const pendingCommentTurnsByKey = new Map<string, TimelineEvent[]>();
+  // New card callbacks write input.received before enqueueing, but retain a
+  // turn.started fallback for rolling upgrades from older services. Without
+  // it, a deferred restart can destroy a live choice turn between releases.
+  const pendingCardTurnsByKey = new Map<string, TimelineEvent[]>();
   // Engine background tasks (run_in_background shells / subagents) outlive
   // their foreground turn: the turn pairs off as completed while the engine
   // worker still owns live background work. Restarting then kills it mid-run
@@ -2304,6 +2319,22 @@ async function readLarkPendingTurnActivity(
       continue;
     }
 
+    if (event.type === "turn.started" && isLarkCardActionTimelineEvent(event)) {
+      const messageId = getLarkTimelineMessageId(event);
+      const alreadyTracked = messageId
+        ? pendingByConversationKey.get(conversationKey)?.some(
+          (pendingEvent) => getLarkTimelineMessageId(pendingEvent) === messageId,
+        ) === true
+        : false;
+      if (!alreadyTracked) {
+        const key = getLarkTimelineCardActionPairingKey(event);
+        const pending = pendingCardTurnsByKey.get(key) ?? [];
+        pending.push(event);
+        pendingCardTurnsByKey.set(key, pending);
+      }
+      continue;
+    }
+
     // Doc-comment turns log turn.started/turn.completed (comment-handler) with
     // larkSurface "comment" instead of input.received; pair those per comment.
     if (event.type === "turn.started" && isLarkCommentTimelineEvent(event)) {
@@ -2326,6 +2357,15 @@ async function readLarkPendingTurnActivity(
         pendingCommentTurnsByKey.delete(key);
       }
       continue;
+    }
+
+    if (isLarkCardActionTimelineEvent(event)) {
+      const key = getLarkTimelineCardActionPairingKey(event);
+      const pending = pendingCardTurnsByKey.get(key);
+      pending?.shift();
+      if (pending && pending.length === 0) {
+        pendingCardTurnsByKey.delete(key);
+      }
     }
 
     const messageId = getLarkTimelineMessageId(event);
@@ -2354,6 +2394,7 @@ async function readLarkPendingTurnActivity(
     ...[...pendingByConversationKey.values()].flat(),
     ...[...pendingCronRunsByJobId.values()].flat(),
     ...[...pendingCommentTurnsByKey.values()].flat(),
+    ...[...pendingCardTurnsByKey.values()].flat(),
     ...pendingBackgroundTasksByKey.values(),
   ]
     .filter((event) => {

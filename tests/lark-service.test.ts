@@ -13706,6 +13706,26 @@ describe("lark service", () => {
         status: "resolved",
         selectedLabel: "继续",
       });
+      const queuedTimeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(queuedTimeline).toContainEqual(expect.objectContaining({
+        type: "input.received",
+        outcome: "accepted",
+        conversationKey: "lark:oc_chat",
+        metadata: expect.objectContaining({
+          source: "card_action",
+          action: "choice",
+          choiceLabel: "继续",
+          larkMessageId: "om_choice",
+        }),
+      }));
+      expect(queuedTimeline).not.toContainEqual(expect.objectContaining({
+        type: "turn.started",
+        metadata: expect.objectContaining({
+          source: "card_action",
+          action: "choice",
+          larkMessageId: "om_choice",
+        }),
+      }));
 
       releaseBlocker();
       await blocker;
@@ -13871,6 +13891,21 @@ describe("lark service", () => {
       await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: "input.received",
+          channel: "lark",
+          chatId: stableLarkNumericId("lark:oc_chat"),
+          userId: stableLarkNumericId("user:ou_user"),
+          conversationKey: "lark:oc_chat",
+          outcome: "accepted",
+          metadata: expect.objectContaining({
+            source: "card_action",
+            action: "choice",
+            larkChatId: "oc_chat",
+            larkMessageId: "card_1",
+            bridgeChatType: "private",
+          }),
+        }),
         expect.objectContaining({
           type: "turn.started",
           channel: "lark",

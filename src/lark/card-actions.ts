@@ -1574,6 +1574,17 @@ export async function handleLarkCardAction(input: {
       `value: ${choiceValue}`,
     ].filter((line): line is string => line !== undefined).join("\n");
     const userId = stableLarkNumericId(`user:${input.event.operator?.openId ?? input.event.operator?.userId ?? "unknown"}`);
+    await appendLarkCardActionInputEvent({
+      stateDir: input.stateDir,
+      chatId: input.event.chatId,
+      replyTo: input.event.messageId,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+      userId,
+    }, {
+      action: "choice",
+      metadata: { choiceLabel: label },
+    });
     await appendLarkCardActionEngineEvent({
       stateDir: input.stateDir,
       chatId: input.event.chatId,
@@ -1660,6 +1671,17 @@ export async function handleLarkCardAction(input: {
       return true;
     }
     const userId = stableLarkNumericId(`user:${larkOperatorRawId(input.event.operator)}`);
+    await appendLarkCardActionInputEvent({
+      stateDir: input.stateDir,
+      chatId: input.event.chatId,
+      replyTo: input.event.messageId,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+      userId,
+    }, {
+      action: "continue_archive",
+      metadata: { uploadId: value.uploadId },
+    });
     await input.runtime.chatQueue.enqueue(value.conversationKey, async () => {
       await runLarkArchiveContinueCardAction({
         channel: input.channel,
@@ -2297,6 +2319,41 @@ async function appendLarkCardActionEngineEvent(
       ...event.metadata,
     },
   }, "Lark card action engine timeline event");
+}
+
+async function appendLarkCardActionInputEvent(
+  input: {
+    stateDir: string;
+    chatId: string;
+    replyTo: string;
+    conversationKey: string;
+    bridgeChatType: "private" | "group";
+    userId: number;
+  },
+  event: {
+    action: LarkCardActionTimelineAction;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<void> {
+  // Persist acceptance before enqueueing. The service restart guard pairs this
+  // with turn.completed, so a card action waiting behind another turn cannot
+  // be mistaken for an idle instance during a deferred release restart.
+  await appendTimelineEventBestEffort(input.stateDir, {
+    type: "input.received",
+    channel: "lark",
+    chatId: stableLarkNumericId(input.conversationKey),
+    userId: input.userId,
+    conversationKey: input.conversationKey,
+    outcome: "accepted",
+    metadata: {
+      source: "card_action",
+      action: event.action,
+      larkChatId: input.chatId,
+      larkMessageId: input.replyTo,
+      bridgeChatType: input.bridgeChatType,
+      ...event.metadata,
+    },
+  }, "Lark card action input timeline event");
 }
 
 async function appendLarkCardActionTurnEvent(

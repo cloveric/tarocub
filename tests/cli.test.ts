@@ -1046,6 +1046,59 @@ describe("runCli", () => {
     }
   });
 
+  it("refuses to restart a legacy in-flight Lark card action turn", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const stateDir = path.join(tempDir, "lark-state");
+    const stop = vi.fn(async () => "stopped" as const);
+    const start = vi.fn(async () => "started" as const);
+    const waitUntilRunning = vi.fn(async () => undefined);
+    const env = {
+      USERPROFILE: tempDir,
+      LARK_APP_ID: "cli_a",
+      LARK_APP_SECRET: "secret",
+      CCTB_LARK_INSTANCE: "alpha",
+      CCTB_LARK_STATE_DIR: stateDir,
+    };
+    const event = (extra: Record<string, unknown>) => `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      channel: "lark",
+      chatId: 123,
+      conversationKey: "lark:oc_chat",
+      userId: 456,
+      metadata: {
+        source: "card_action",
+        action: "choice",
+        larkMessageId: "om_choice",
+      },
+      ...extra,
+    })}\n`;
+
+    try {
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), event({ type: "turn.started" }));
+
+      await expect(runCli(["lark", "service", "restart"], {
+        env,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).rejects.toThrow('Lark instance "alpha" has 1 active or queued Lark turn');
+      expect(stop).not.toHaveBeenCalled();
+
+      await writeFile(path.join(stateDir, "timeline.log.jsonl"), [
+        event({ type: "turn.started" }),
+        event({ type: "turn.completed", outcome: "success" }),
+      ].join(""));
+      await expect(runCli(["lark", "service", "restart"], {
+        env,
+        logger: { log: () => undefined },
+        larkServiceDeps: { start, stop, waitUntilRunning },
+      })).resolves.toBe(true);
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("finds an active Lark turn whose start record moved into a rotated timeline", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const stateDir = path.join(tempDir, "lark-state");
