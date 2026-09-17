@@ -44,6 +44,30 @@ ACP was verified to provide:
 This is sufficient to build the adapter without simulating unavailable Kimi
 features.
 
+## Kimi 0.43.1 Compatibility Re-probe
+
+- Probe date: 2026-09-17
+- Binary: `~/.kimi-code/bin/kimi`
+- Version: `0.43.1`
+- Integration protocol: persistent `kimi acp`
+- Client SDK: `@agentclientprotocol/sdk@1.4.0`
+
+TaroCub's rebuilt real adapter initialized a new ACP session, streamed thought
+and assistant text, listed the native session, loaded it through a fresh Kimi
+process, and completed a resumed turn. The focused Kimi adapter, Hook relay,
+and workspace suites also passed 107 tests.
+
+The upstream 0.43.0-to-0.43.1 diff does not alter the ACP transport, reverse
+request schemas, Hook event payloads, or MCP registration surface. It fixes
+subagent/swarm event-loop stalls, rendering slowdown, retained agent scopes,
+Ctrl-C behavior in the native TUI, and tower roster identity. The internal
+agent event bus was sharded while explicitly preserving full-stream-before-
+typed-handler ordering. TaroCub does not consume the TUI Ctrl-C path, and its
+ACP/Hook contracts remain unchanged, so no adapter compatibility shim is
+required. The release should improve long-running subagent/swarm resource use
+without changing channel behavior. See the
+[0.43.1 release](https://github.com/MoonshotAI/kimi-code/releases/tag/%40moonshot-ai/kimi-code%400.43.1).
+
 ## Kimi 0.43.0 Compatibility Re-probe
 
 - Probe date: 2026-09-14

@@ -198,14 +198,16 @@ override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
 exposes local Codex skills to bridge-owned Kimi workspaces and injects the
 built-in Search MCP alongside Kimi's native MCP/plugins.
 
-The current compatibility baseline is **Kimi Code 0.43.0** with
-`@agentclientprotocol/sdk` 1.4.0. A live ACP probe
-verified `session/new` and cross-process `session/load`, structured questions,
-Search MCP execution, cancellation followed by worker reuse, and exactly-once
-background Agent completion. Kimi 0.43's standard ACP form elicitation was also
-verified end to end with two questions, including multi-select and distinct
-display labels/wire values. Older permission-style single-choice requests remain
-supported as a compatibility fallback. TaroCub always supplies the complete configured
+The current compatibility baseline is **Kimi Code 0.43.1** with
+`@agentclientprotocol/sdk` 1.4.0. A live 0.43.1 ACP probe verified
+`session/new`, streamed thought/text, `session/list`, cross-process
+`session/load`, and a resumed turn. The preceding 0.43.0 probe also verified
+structured questions, Search MCP execution, cancellation followed by worker
+reuse, and exactly-once background Agent completion. Kimi 0.43's standard ACP
+form elicitation was verified end to end with two questions, including
+multi-select and distinct display labels/wire values. Older permission-style
+single-choice requests remain supported as a compatibility fallback. TaroCub
+always supplies the complete configured
 MCP list and fails closed if Kimi rejects session initialization; it does not
 retry by silently removing stdio search. Native Kimi user/project MCP files and
 plugins remain independent. Kimi 0.43 can defer MCP tool definitions, but the
