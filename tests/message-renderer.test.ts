@@ -134,6 +134,9 @@ describe("message rendering", () => {
     expect(renderCategorizedErrorMessage("auth", "missing auth")).toBe(
       "Error: Engine authentication is missing or expired. Re-login for this instance and retry.",
     );
+    expect(renderCategorizedErrorMessage("engine-quota", "5-hour usage limit", "en", "kimi")).toBe(
+      "Error: Kimi's current 5-hour usage quota is exhausted. Wait for the usage window to reset, or purchase extra usage/upgrade; signing in again or restarting will not help.",
+    );
     expect(
       renderCategorizedErrorMessage(
         "auth",

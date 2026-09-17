@@ -7,6 +7,7 @@ export type FailureCategory =
   | "telegram-delivery"
   | "engine-cli"
   | "engine-backend"
+  | "engine-quota"
   | "engine-timeout"
   | "engine-busy"
   | "engine-thread-locked"
@@ -83,6 +84,19 @@ export function classifyFailure(error: unknown): FailureCategory {
   // can retry once it settles.
   if (text.includes("already has an in-flight turn")) {
     return "engine-busy";
+  }
+
+  // Some CLIs wrap account quota exhaustion in an authentication-looking 403
+  // (Kimi currently prefixes it with "Authentication required"). Detect the
+  // actionable quota text first so users are not told to sign in again.
+  if (
+    text.includes("you've reached your 5-hour usage limit") ||
+    text.includes("quota will reset when the current") ||
+    text.includes("purchase extra usage") ||
+    text.includes("insufficient_quota") ||
+    text.includes("billing hard limit has been reached")
+  ) {
+    return "engine-quota";
   }
 
   if (
@@ -234,6 +248,8 @@ export function getBusErrorSemantics(failureCategory: FailureCategory): BusError
       return { code: "engine_cli", retryable: true };
     case "engine-backend":
       return { code: "engine_backend", retryable: true };
+    case "engine-quota":
+      return { code: "engine_quota", retryable: false };
     case "engine-timeout":
       // Re-running the same long task as-is just times out again; not auto-retryable.
       return { code: "engine_timeout", retryable: false };

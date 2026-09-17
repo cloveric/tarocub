@@ -549,6 +549,11 @@ export function renderCategorizedErrorMessage(
     if (category === "engine-backend") {
       return "错误：引擎服务暂时过载或连接中断，请稍后再试；无需重启实例。";
     }
+    if (category === "engine-quota") {
+      return engine === "kimi"
+        ? "错误：Kimi 当前 5 小时使用额度已用完。请等待额度窗口重置，或购买额外额度/升级套餐；重新登录或重启都无效。"
+        : "错误：引擎使用额度已用完。请等待额度窗口重置或提高账户额度；重新登录或重启都无效。";
+    }
     if (category === "engine-timeout") {
       const duration = timeoutMinutes ? `${timeoutMinutes} 分钟` : "配置的时限";
       return `错误：任务达到${duration}上限或长时间无响应，已自动停止。直接原样重试通常还会超时；请拆分任务，或先用 \`/timeout\` 调整时限。`;
@@ -599,6 +604,11 @@ export function renderCategorizedErrorMessage(
   }
   if (category === "engine-backend") {
     return "Error: The engine backend is temporarily overloaded or disconnected. Retry later; restarting the instance is not required.";
+  }
+  if (category === "engine-quota") {
+    return engine === "kimi"
+      ? "Error: Kimi's current 5-hour usage quota is exhausted. Wait for the usage window to reset, or purchase extra usage/upgrade; signing in again or restarting will not help."
+      : "Error: The engine usage quota is exhausted. Wait for the quota window to reset or increase the account quota; signing in again or restarting will not help.";
   }
   if (category === "engine-timeout") {
     const duration = timeoutMinutes ? `${timeoutMinutes}-minute` : "configured";

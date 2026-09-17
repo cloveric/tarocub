@@ -30,6 +30,24 @@ describe("classifyFailure auth detection", () => {
     ))).toBe("auth");
   });
 
+  it("classifies Kimi's auth-prefixed 5-hour quota error as quota, not auth", () => {
+    const error = new Error(
+      "Authentication required: 403 You've reached your 5-hour usage limit. " +
+      "Your quota will reset when the current 5-hour window ends. " +
+      "To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota",
+    );
+
+    expect(classifyFailure(error)).toBe("engine-quota");
+    expect(getBusErrorSemantics("engine-quota")).toEqual({ code: "engine_quota", retryable: false });
+    const zh = renderLarkUserFacingError(error, "engine", "zh");
+    expect(zh).toContain("Kimi 当前 5 小时使用额度已用完");
+    expect(zh).toContain("重新登录或重启都无效");
+    expect(zh).not.toContain("认证已失效");
+    const en = renderLarkUserFacingError(error, "engine", "en");
+    expect(en).toContain("5-hour usage quota is exhausted");
+    expect(en).toContain("signing in again or restarting will not help");
+  });
+
   it("renders the Antigravity startup auth failure instead of restart advice", () => {
     const error = new Error(
       "Antigravity emitted result before init\n\n" +
@@ -210,6 +228,7 @@ describe("getBusErrorSemantics", () => {
     expect(getBusErrorSemantics("telegram-conflict")).toEqual({ code: "telegram_conflict", retryable: true });
     expect(getBusErrorSemantics("workflow-state")).toEqual({ code: "workflow_state", retryable: false });
     expect(getBusErrorSemantics("engine-backend")).toEqual({ code: "engine_backend", retryable: true });
+    expect(getBusErrorSemantics("engine-quota")).toEqual({ code: "engine_quota", retryable: false });
     expect(getBusErrorSemantics("unknown")).toEqual({ code: "unknown", retryable: true });
   });
 });

@@ -40,6 +40,7 @@ export function renderLarkUserFacingError(
   const category = classifyFailure(error);
   const errorText = error instanceof Error ? `${error.name}\n${error.message}` : String(error);
   const isAntigravityAuth = category === "auth" && /(?:antigravity|\bagy\b)/i.test(errorText);
+  const isKimiQuota = category === "engine-quota" && /(?:kimi|5-hour usage limit)/i.test(errorText);
   if (category === "engine-thread-locked") {
     // The adapter already produced an operator-actionable explanation (who
     // holds the lock, what to do). Surfacing it verbatim is the whole point —
@@ -74,6 +75,11 @@ export function renderLarkUserFacingError(
     }
     if (category === "engine-backend") {
       return "Error: Codex lost its backend connection (reconnect attempts exhausted). Please retry.";
+    }
+    if (category === "engine-quota") {
+      return isKimiQuota
+        ? "Error: Kimi's current 5-hour usage quota is exhausted. Wait for the usage window to reset, or purchase extra usage/upgrade; signing in again or restarting will not help."
+        : "Error: the engine usage quota is exhausted. Wait for the quota window to reset or increase the account quota; signing in again or restarting will not help.";
     }
     if (category === "engine-timeout") {
       return "⏱️ This turn hit the single-turn time cap (60 min) and was stopped — not a crash, so restarting won't help. For a genuinely long task, send `/timeout off` to lift the cap and rerun, or split it into smaller steps.";
@@ -112,6 +118,11 @@ export function renderLarkUserFacingError(
   }
   if (category === "engine-backend") {
     return "错误：Codex 连接后端失败（重连耗尽），请重试。";
+  }
+  if (category === "engine-quota") {
+    return isKimiQuota
+      ? "错误：Kimi 当前 5 小时使用额度已用完。请等待额度窗口重置，或购买额外额度/升级套餐；重新登录或重启都无效。"
+      : "错误：引擎使用额度已用完。请等待额度窗口重置或提高账户额度；重新登录或重启都无效。";
   }
   if (category === "engine-timeout") {
     return "⏱️ 本轮撞了单轮 60 分钟时间上限被自动终止——不是崩溃，重启没用。任务确实很长的话，发 `/timeout off` 放开上限后重跑，或把任务拆小。";
