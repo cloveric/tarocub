@@ -1869,6 +1869,7 @@ async function runNormalizedLarkMessage(
           try {
             await deliverLarkUserInputRequest({
               channel: input.channel,
+              runtime: input.runtime,
               chatId: normalized.chatId,
               toolInput: event.toolInput,
               conversationKey: normalized.conversationKey,

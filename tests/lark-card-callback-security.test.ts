@@ -247,6 +247,7 @@ describe("lark card callback security", () => {
         },
       });
       expect(handled).toBe(true);
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       expect(choiceBridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         conversationKey: "lark:oc_chat",
         text: expect.stringContaining("continue"),

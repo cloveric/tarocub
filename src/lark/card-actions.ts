@@ -46,7 +46,7 @@ import { sendManagedCard, settleThenUpdateManagedCard, updateManagedCard } from 
 import { claimLarkRunSlot } from "./bus.js";
 import { larkAccessChatIdFromConversationKey, larkAccessConversationKeyFromConversationKey, stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
-import type { LarkServiceRuntime, PendingLarkApproval, PendingLarkBatch } from "./runtime.js";
+import type { LarkChoiceCardRef, LarkServiceRuntime, PendingLarkApproval, PendingLarkBatch } from "./runtime.js";
 import type { LarkBridgeLike, LarkChannelLike, LarkSendOptions } from "./types.js";
 
 type LarkApprovalChoice = "once" | "session" | "deny";
@@ -1553,6 +1553,12 @@ export async function handleLarkCardAction(input: {
       return true;
     }
     const label = typeof value.label === "string" ? value.label : "choice";
+    const choiceCard = claimLarkChoiceCard(input.runtime, input.event.messageId, label);
+    if (!choiceCard) {
+      // The first tap already claimed this card. A repeated tap is acknowledged
+      // but must not enqueue a second engine turn.
+      return true;
+    }
     const choiceValue = typeof value.value === "string" ? value.value : JSON.stringify(value.value ?? label);
     const locale = await resolveLarkLocale(input.stateDir);
     const text = [
@@ -1568,7 +1574,34 @@ export async function handleLarkCardAction(input: {
       `value: ${choiceValue}`,
     ].filter((line): line is string => line !== undefined).join("\n");
     const userId = stableLarkNumericId(`user:${input.event.operator?.openId ?? input.event.operator?.userId ?? "unknown"}`);
-    await input.runtime.chatQueue.enqueue(value.conversationKey, async () => {
+    await appendLarkCardActionEngineEvent({
+      stateDir: input.stateDir,
+      chatId: input.event.chatId,
+      replyTo: input.event.messageId,
+      conversationKey: value.conversationKey,
+      bridgeChatType,
+      userId,
+    }, {
+      type: "engine.event",
+      action: "choice",
+      outcome: "received",
+      detail: "choice_button",
+      metadata: { choiceLabel: label },
+    });
+    settleLarkChoiceCard({
+      channel: input.channel,
+      chatId: input.event.chatId,
+      replyInThread,
+      locale,
+      label,
+      ref: choiceCard,
+    });
+
+    // Do not await the queued engine turn here. Lark keeps the tapped card
+    // interaction-locked until this callback returns; waiting for a busy queue
+    // left the buttons live and caused callback timeouts. The queue still owns
+    // ordering and error delivery, while this handler acknowledges immediately.
+    const queued = input.runtime.chatQueue.enqueue(value.conversationKey, async () => {
       await runLarkCardChoice({
         channel: input.channel,
         bridge: input.bridge!,
@@ -1604,6 +1637,7 @@ export async function handleLarkCardAction(input: {
         return true;
       },
     });
+    void queued.catch(() => undefined);
     return true;
   }
 
@@ -1777,6 +1811,90 @@ function pendingLarkApprovalMatchesEvent(
     return false;
   }
   return true;
+}
+
+const MAX_TRACKED_LARK_CHOICE_CARDS = 512;
+
+function claimLarkChoiceCard(
+  runtime: LarkServiceRuntime,
+  messageId: string,
+  selectedLabel: string,
+): LarkChoiceCardRef | undefined {
+  const current = runtime.choiceCards.get(messageId);
+  if (current?.status === "resolved") {
+    return undefined;
+  }
+  const claimed: LarkChoiceCardRef = {
+    messageId,
+    ...(current?.handle ? { handle: current.handle } : {}),
+    status: "resolved",
+    createdAt: current?.createdAt ?? Date.now(),
+    selectedLabel,
+  };
+  runtime.choiceCards.delete(messageId);
+  runtime.choiceCards.set(messageId, claimed);
+  while (runtime.choiceCards.size > MAX_TRACKED_LARK_CHOICE_CARDS) {
+    const oldest = runtime.choiceCards.keys().next().value as string | undefined;
+    if (!oldest) {
+      break;
+    }
+    runtime.choiceCards.delete(oldest);
+  }
+  return claimed;
+}
+
+function renderLarkChoiceSubmittedCard(label: string, locale: Locale): Record<string, unknown> {
+  const title = locale === "en" ? "Choice received" : "已收到选择";
+  const body = locale === "en"
+    ? `✅ Selected: **${label}**\n\nThe task will continue with this choice. No need to click again.`
+    : `✅ 已选择：**${label}**\n\n任务将按此选择继续，无需重复点击。`;
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: title } },
+    header: {
+      template: "green",
+      title: { tag: "plain_text", content: `✅ ${title}` },
+    },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [{ tag: "markdown", content: body }],
+    },
+  };
+}
+
+function settleLarkChoiceCard(input: {
+  channel: LarkChannelLike;
+  chatId: string;
+  replyInThread?: boolean;
+  locale: Locale;
+  label: string;
+  ref: LarkChoiceCardRef;
+}): void {
+  const submittedCard = renderLarkChoiceSubmittedCard(input.label, input.locale);
+  const postSummaryFallback = async (): Promise<void> => {
+    await sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: input.chatId,
+      card: submittedCard,
+      fallbackText: input.locale === "en"
+        ? `Choice received: ${input.label}. The task will continue with this choice.`
+        : `已收到选择：${input.label}。任务将按此选择继续。`,
+      options: larkReplyOptions(input.ref.messageId, input.replyInThread),
+      locale: input.locale,
+    });
+    if (input.channel.recallMessage) {
+      await input.channel.recallMessage(input.ref.messageId).catch(() => undefined);
+    }
+  };
+
+  if (input.ref.handle) {
+    settleThenUpdateManagedCard(input.channel, input.ref.handle, submittedCard, postSummaryFallback);
+    return;
+  }
+  // Legacy/plain cards cannot be updated reliably immediately after a tap.
+  // Replace them with a read-only summary and recall the live-button card.
+  void postSummaryFallback().catch(() => undefined);
 }
 
 async function runLarkCardChoice(input: {

@@ -22,7 +22,7 @@ import {
   type LarkStreamControllerLike,
   requestLarkApproval,
 } from "../src/lark/service.js";
-import { deliverLarkResponse, LARK_FILE_UPLOAD_MAX_BYTES } from "../src/lark/delivery.js";
+import { deliverLarkResponse, deliverLarkUserInputRequest, LARK_FILE_UPLOAD_MAX_BYTES } from "../src/lark/delivery.js";
 import { LarkCliError } from "../src/lark/lark-cli-error.js";
 import { createLarkRunCardController } from "../src/lark/message-handler.js";
 import { LarkGroupModeStore } from "../src/lark/group-mode-store.js";
@@ -13592,6 +13592,7 @@ describe("lark service", () => {
       });
 
       expect(handled).toBe(true);
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       expect(channel.stream).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
@@ -13606,6 +13607,114 @@ describe("lark service", () => {
         onApprovalRequest: expect.any(Function),
       }));
     } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("settles a queued choice card immediately and ignores repeated taps", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-choice-dedupe-"));
+    const runtime = createLarkServiceRuntime();
+    const create = vi.fn(async () => ({ data: { card_id: "card_choice" } }));
+    const update = vi.fn(async () => ({ data: {} }));
+    const reply = vi.fn(async () => ({ data: { message_id: "om_choice" } }));
+    const channel = fakeChannel({
+      rawClient: {
+        cardkit: { v1: { card: { create, update } } },
+        im: { v1: { message: { reply } } },
+      },
+    });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "choice handled" })),
+    };
+    let releaseBlocker = (): void => undefined;
+    let resolveStarted = (): void => undefined;
+    const blockerStarted = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const blockerGate = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+    let firstAction: Promise<boolean> | undefined;
+    let blocker: Promise<boolean> | undefined;
+
+    try {
+      await deliverLarkUserInputRequest({
+        channel,
+        runtime,
+        chatId: "oc_chat",
+        conversationKey: "lark:oc_chat",
+        bridgeChatType: "private",
+        replyTo: "om_origin",
+        locale: "zh",
+        toolInput: {
+          questions: [{
+            question: "请选择执行方向",
+            options: [{ label: "继续", description: "按当前方案继续。" }],
+          }],
+        },
+      });
+      expect(runtime.choiceCards.get("om_choice")?.handle?.cardId).toBe("card_choice");
+
+      blocker = runtime.chatQueue.enqueue("lark:oc_chat", async () => {
+        resolveStarted();
+        await blockerGate;
+        return true;
+      });
+      await blockerStarted;
+
+      const actionInput = () => ({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "om_choice",
+          operator: { openId: "ou_user", name: "Clover" },
+          action: {
+            value: {
+              cctb_lark: "choice",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              label: "继续",
+              value: "continue",
+            },
+          },
+        },
+      });
+
+      firstAction = handleLarkCardAction(actionInput());
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const firstResult = await Promise.race<boolean | "timeout">([
+        firstAction,
+        new Promise<"timeout">((resolve) => {
+          timeout = setTimeout(() => resolve("timeout"), 300);
+        }),
+      ]);
+      if (timeout) clearTimeout(timeout);
+      expect(firstResult).toBe(true);
+      await expect(handleLarkCardAction(actionInput())).resolves.toBe(true);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+
+      await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1), { timeout: 2000 });
+      const terminalCard = JSON.stringify(update.mock.calls[0]);
+      expect(terminalCard).toContain("已收到选择");
+      expect(terminalCard).toContain("继续");
+      expect(terminalCard).not.toContain('"tag":"button"');
+      expect(terminalCard).not.toContain('"cctb_lark":"choice"');
+      expect(runtime.choiceCards.get("om_choice")).toMatchObject({
+        status: "resolved",
+        selectedLabel: "继续",
+      });
+
+      releaseBlocker();
+      await blocker;
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseBlocker();
+      await blocker?.catch(() => undefined);
+      await firstAction?.catch(() => undefined);
       await rm(stateDir, { recursive: true, force: true });
     }
   });
@@ -13642,6 +13751,7 @@ describe("lark service", () => {
       });
 
       expect(handled).toBe(true);
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
         locale: "en",
         conversationKey: "lark:oc_chat",
@@ -13693,6 +13803,7 @@ describe("lark service", () => {
       });
 
       expect(handled).toBe(true);
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       expect(channel.stream).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
@@ -13757,6 +13868,7 @@ describe("lark service", () => {
       });
 
       expect(handled).toBe(true);
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -13830,6 +13942,7 @@ describe("lark service", () => {
       });
 
       expect(handled).toBe(true);
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { text: "错误：飞书工具执行失败，详细原因已记录到日志。" },
@@ -13887,6 +14000,7 @@ describe("lark service", () => {
       });
 
       expect(handled).toBe(true);
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_group:omt_topic")).toBe(false));
       expect(channel.send).toHaveBeenCalledWith(
         "oc_group",
         { markdown: "choice handled" },
@@ -13946,6 +14060,11 @@ describe("lark service", () => {
       expect(enqueueSpy).toHaveBeenCalledWith("lark:oc_chat", expect.any(Function), expect.objectContaining({
         onSkipped: expect.any(Function),
       }));
+      await vi.waitFor(() => expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "已跳过排队中的任务。" },
+        { replyTo: "card_1" },
+      ));
       expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "已跳过排队中的任务。" }, { replyTo: "card_1" });
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({

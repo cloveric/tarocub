@@ -36,6 +36,7 @@ import {
 import { parseLarkDocumentCreateInput } from "./document-client.js";
 import { renderLarkUserFacingError } from "./errors.js";
 import { resolveLarkLocale } from "./locale.js";
+import { sendManagedCard, type ManagedCardHandle } from "./managed-card.js";
 import { maybeSendLarkScopeAuthCard } from "./scope-auth.js";
 import { resolveLarkMentionsInText, shouldResolveLarkMentions } from "./mention-resolver.js";
 import { stableLarkNumericId } from "./message-normalizer.js";
@@ -58,6 +59,7 @@ export interface LarkDeliveryResult {
 
 export async function deliverLarkUserInputRequest(input: {
   channel: LarkChannelLike;
+  runtime: LarkServiceRuntime;
   chatId: string;
   toolInput: unknown;
   conversationKey?: string;
@@ -75,14 +77,62 @@ export async function deliverLarkUserInputRequest(input: {
     input.replyInThread,
     input.locale,
   );
-  await sendLarkCardWithFallback({
+  await sendTrackedLarkChoiceCard({
     channel: input.channel,
+    runtime: input.runtime,
     chatId: input.chatId,
     card,
     fallbackText: renderLarkToolCardFallback(cardPayload, input.locale),
     options: larkReplyOptions(input.replyTo, input.replyInThread),
     locale: input.locale,
   });
+}
+
+const MAX_TRACKED_LARK_CHOICE_CARDS = 512;
+
+async function sendTrackedLarkChoiceCard(input: {
+  channel: LarkChannelLike;
+  runtime: LarkServiceRuntime;
+  chatId: string;
+  card: object;
+  fallbackText: string;
+  options?: LarkSendOptions;
+  locale: Locale;
+}): Promise<void> {
+  const managed = await sendManagedCard(input.channel, input.chatId, input.card, {
+    ...(input.options?.replyTo ? { replyTo: input.options.replyTo } : {}),
+    ...(input.options?.replyInThread ? { replyInThread: true } : {}),
+  });
+  if (managed) {
+    trackLarkChoiceCard(input.runtime, managed.messageId, managed);
+    return;
+  }
+
+  const sent = await sendLarkCardWithFallback(input);
+  if (!sent.fallback) {
+    trackLarkChoiceCard(input.runtime, sent.messageId);
+  }
+}
+
+function trackLarkChoiceCard(
+  runtime: LarkServiceRuntime,
+  messageId: string,
+  handle?: ManagedCardHandle,
+): void {
+  runtime.choiceCards.delete(messageId);
+  runtime.choiceCards.set(messageId, {
+    messageId,
+    ...(handle ? { handle } : {}),
+    status: "active",
+    createdAt: Date.now(),
+  });
+  while (runtime.choiceCards.size > MAX_TRACKED_LARK_CHOICE_CARDS) {
+    const oldest = runtime.choiceCards.keys().next().value as string | undefined;
+    if (!oldest) {
+      break;
+    }
+    runtime.choiceCards.delete(oldest);
+  }
 }
 
 /** Whether a response carries work that must finish after the engine result. */
@@ -706,8 +756,9 @@ async function executeLarkToolTag(input: {
       input.replyInThread,
       input.locale,
     );
-    await sendLarkCardWithFallback({
+    await sendTrackedLarkChoiceCard({
       channel: input.channel,
+      runtime: input.runtime,
       chatId: input.chatId,
       card,
       fallbackText: renderLarkToolCardFallback(cardPayload, input.locale),
@@ -725,6 +776,7 @@ async function executeLarkToolTag(input: {
   ) {
     await deliverLarkUserInputRequest({
       channel: input.channel,
+      runtime: input.runtime,
       chatId: input.chatId,
       toolInput: input.payload,
       conversationKey: input.conversationKey,
@@ -738,14 +790,19 @@ async function executeLarkToolTag(input: {
 
   if (input.name === "lark.card" || input.name === "send.card") {
     const card = buildLarkToolCard(payload, input.conversationKey, input.bridgeChatType, input.replyInThread, input.locale);
-    await sendLarkCardWithFallback({
+    const cardInput = {
       channel: input.channel,
       chatId: input.chatId,
       card,
       fallbackText: renderLarkToolCardFallback(payload, input.locale),
       options: larkReplyOptions(input.replyTo, input.replyInThread),
       locale: input.locale,
-    });
+    };
+    if (JSON.stringify(card).includes('"cctb_lark":"choice"')) {
+      await sendTrackedLarkChoiceCard({ ...cardInput, runtime: input.runtime });
+    } else {
+      await sendLarkCardWithFallback(cardInput);
+    }
     return true;
   }
 

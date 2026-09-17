@@ -274,6 +274,7 @@ describe("lark audit fixes", () => {
         },
       });
 
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
       expect(goal.signal.aborted).toBe(false);
       // The goal still owns the slot after the card turn released its claim.
@@ -323,6 +324,7 @@ describe("lark audit fixes", () => {
         },
       });
 
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
       expect(previous.signal.aborted).toBe(true);
       // The finally block must NOT clobber the newer claim.

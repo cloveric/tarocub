@@ -118,6 +118,19 @@ export interface LarkQueueCardRef {
   handle?: ManagedCardHandle;
 }
 
+/**
+ * A bridge-managed choice card. Keeping both active and resolved entries lets
+ * the callback handler reject duplicate taps even before the terminal CardKit
+ * update becomes visible on the client.
+ */
+export interface LarkChoiceCardRef {
+  messageId: string;
+  handle?: ManagedCardHandle;
+  status: "active" | "resolved";
+  createdAt: number;
+  selectedLabel?: string;
+}
+
 export interface LarkServiceRuntime {
   activeRuns: Map<string, LarkActiveRun>;
   pendingApprovals: Map<string, PendingLarkApproval>;
@@ -133,6 +146,8 @@ export interface LarkServiceRuntime {
   /** queued message id → its "queued" card ref, so each task's run card reuses
    *  its own card and the cancel handler can update it in place. */
   queueCards: Map<string, LarkQueueCardRef>;
+  /** Choice-card message id → delivery handle and one-shot callback state. */
+  choiceCards: Map<string, LarkChoiceCardRef>;
   /**
    * Queued task ids the user explicitly cancelled from a card button. The
    * cancel handler already updated that task's card, so its eventual skip must
@@ -184,6 +199,7 @@ export function createLarkServiceRuntime(options: {
     pendingBatches: new Map(),
     chatModeCache: new Map(),
     queueCards: new Map(),
+    choiceCards: new Map(),
     cancelledQueueTaskIds: new Set(),
     ...(options.cronRuntime ? { cronRuntime: options.cronRuntime } : {}),
     ...(options.busRuntime ? { busRuntime: options.busRuntime } : {}),
