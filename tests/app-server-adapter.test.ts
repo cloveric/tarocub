@@ -1951,6 +1951,52 @@ describe("CodexAppServerAdapter", () => {
     await expect(promise).rejects.toThrow("unexpected status 401 Unauthorized");
   });
 
+  it("does not let a recovered transport error override a completed turn", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Download the video",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stdout.emitData('{"method":"error","params":{"error":{"message":"Reconnecting... waiting for network"},"willRetry":true,"threadId":"thread-123","turnId":"turn-1"}}\n');
+    child.stdout.emitData('{"method":"item/completed","params":{"threadId":"thread-123","turnId":"turn-1","item":{"type":"agentMessage","text":"Downloaded and verified."}}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"completed","error":null}}}\n');
+
+    await expect(promise).resolves.toEqual({
+      text: "Downloaded and verified.",
+      sessionId: "thread-123",
+    });
+  });
+
+  it("uses the preceding error notification when a failed turn has no error detail", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stdout.emitData('{"method":"error","params":{"error":{"message":"upstream connection failed"},"willRetry":false,"threadId":"thread-123","turnId":"turn-1"}}\n');
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"failed","error":null}}}\n');
+
+    await expect(promise).rejects.toThrow("upstream connection failed");
+  });
+
   it("aborts an in-flight turn when the caller aborts the request", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);

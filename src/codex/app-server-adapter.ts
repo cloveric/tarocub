@@ -146,6 +146,10 @@ type PendingTurn = {
   finalText?: string;
   generatedImageTags: string[];
   usage?: AdapterUsage;
+  /** Latest app-server `error` notification. These notifications can be
+   * transient (`willRetry: true`), so the authoritative turn/completed status
+   * decides whether this message is fatal. */
+  notificationErrorMessage?: string;
   errorMessage?: string;
   turnId?: string;
   /**
@@ -1538,7 +1542,10 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const turnErrorMessage = this.readTurnErrorMessage(parsed.params?.turn);
       this.completingTurns += 1;
       if (turnErrorMessage) {
-        pending.reject(this.withDiagnostics(turnErrorMessage, pending.stderrOffset));
+        const failureMessage = turnErrorMessage === "Codex turn failed."
+          ? pending.notificationErrorMessage ?? turnErrorMessage
+          : turnErrorMessage;
+        pending.reject(this.withDiagnostics(failureMessage, pending.stderrOffset));
         this.finishCompletingTurn();
         return;
       }
@@ -1561,7 +1568,11 @@ export class CodexAppServerAdapter implements CodexAdapter {
       const errorMessage = this.readErrorMessage(parsed.params?.error);
 
       if (pending && errorMessage) {
-        pending.errorMessage = errorMessage;
+        // `error` is also emitted for recoverable transport failures. Do not
+        // let a stale reconnect notice override a later authoritative
+        // turn/completed status=completed. If the turn ultimately fails, the
+        // completion branch above uses this message when it has no better one.
+        pending.notificationErrorMessage = errorMessage;
       }
       return;
     }
@@ -2689,9 +2700,9 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   private async completeTurn(threadId: string, turnId: string | undefined, pending: PendingTurn): Promise<void> {
-    // A turn that received an `error` notification genuinely failed — surface it
-    // (so classifyFailure/auth-retry sees the real cause) even if partial text
-    // was already streamed, instead of reporting the partial output as success.
+    // Local bridge-side failures (for example, a rejected approval callback)
+    // remain fatal. App-server `error` notifications are handled separately:
+    // they may be retryable, so turn/completed is the authority for success.
     if (pending.errorMessage) {
       pending.reject(new Error(pending.errorMessage));
       return;
