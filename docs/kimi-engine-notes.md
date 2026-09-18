@@ -44,6 +44,39 @@ ACP was verified to provide:
 This is sufficient to build the adapter without simulating unavailable Kimi
 features.
 
+## Kimi 2.0.0 Compatibility Re-probe
+
+- Probe date: 2026-09-18
+- Binary: `~/.kimi-code/bin/kimi`
+- Version: `2.0.0`
+- Integration protocol: persistent `kimi acp`
+- Client SDK: `@agentclientprotocol/sdk@1.4.0`
+
+TaroCub's real adapter initialized the installed binary, listed native
+sessions, loaded an existing session through a fresh control process, created
+a new session, and streamed thought and assistant text to an exact response
+marker. A running turn was then cancelled after its first thought event; Kimi
+returned the expected stopped-turn error and the same persistent worker
+completed the next turn successfully. A final probe generated a real PNG in a
+temporary workspace, passed it through the adapter's ordinary attachment path,
+and received the exact text rendered in the image.
+
+The 0.43.1-to-2.0.0 upstream diff does not change the ACP request, reverse
+request, session, or Hook contracts consumed by TaroCub. The cancellation fix
+prevents an internal `AbortError` from escaping and crashing Kimi. Image inputs
+are now uploaded internally as file references, with old media omitted and a
+warning emitted when accumulated media exceed the request budget; the bridge's
+workspace attachment contract remains valid. Finished subagent state is now
+bounded, and interrupted tools and subagents are classified as `cancelled`,
+which matches the bridge's existing terminal-state normalization. The new
+`/desktop` command, Mermaid terminal rendering, and steering transcript fixes
+belong to Kimi's native TUI/KAP surfaces and do not add an ACP client steering
+method. No adapter compatibility shim is required. See the
+[2.0.0 release](https://github.com/MoonshotAI/kimi-code/releases/tag/%40moonshot-ai/kimi-code%402.0.0).
+After the live probes, the focused Kimi adapter suite passed all 94 tests, the
+full repository suite passed 2,970 tests across 166 files with one skip, and
+the TypeScript build passed.
+
 ## Kimi 0.43.1 Compatibility Re-probe
 
 - Probe date: 2026-09-17
@@ -733,6 +766,8 @@ covered by integration tests for a Kimi-configured instance:
   original session cwd persisted for the resumed turn;
 - Kimi 0.43 ACP form elicitation with complete multi-question and multi-select
   cards in Lark and Telegram, plus the older single-choice permission fallback;
+- Kimi 2.0.0 cancellation followed by reuse of the same persistent worker and
+  local image reading through the ordinary attachment path;
 - native workspace instructions, local skills, and the injected TaroCub Search
   MCP alongside Kimi's own MCP/plugins.
 
@@ -743,7 +778,7 @@ extra exception.
 
 ## Verified Gaps
 
-- Kimi ACP has no client mid-turn prompt injection. Kimi 0.43 can steer its own
+- Kimi ACP has no client mid-turn prompt injection. Kimi 2.0 can steer its own
   background `WaitFor`, but `/steer` still reports the ACP gap and new bridge
   messages queue as separate turns.
 - The live ACP `/goal` probe returned `Unknown ACP command: /goal`. The bridge
