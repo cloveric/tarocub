@@ -76,6 +76,14 @@ const SEND_TOOL_NAMES: ReadonlySet<string> = new Set([
   "send.batch",
 ]);
 
+const LARK_BATCH_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+]);
+
 export function isLarkSendToolName(name: string): name is LarkSendToolName {
   return SEND_TOOL_NAMES.has(name);
 }
@@ -122,7 +130,17 @@ export function normalizeLarkSendTool(name: LarkSendToolName, payload: unknown):
     ...(image.caption ? { caption: image.caption } : {}),
   }));
   for (const file of fileEntries) {
-    artifacts.push({ path: file.path, kind: "file" });
+    // Models occasionally put generated PNG/JPEG paths under `files`, which
+    // makes Feishu fan them out as download bubbles. Batch image paths are
+    // unambiguous enough to repair here; explicit send.file keeps file semantics.
+    const kind = LARK_BATCH_IMAGE_EXTENSIONS.has(path.extname(file.path).toLowerCase())
+      ? "image"
+      : "file";
+    artifacts.push({
+      path: file.path,
+      kind,
+      ...(kind === "image" && file.caption ? { caption: file.caption } : {}),
+    });
   }
   for (const filePath of stringArray(record?.audios)) {
     artifacts.push({ path: filePath, kind: "audio" });

@@ -418,6 +418,75 @@ describe("lark service", () => {
     }
   });
 
+  it("groups streamed PNGs misplaced in send.batch files when the engine later returns 503", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-streamed-file-images-partial-"));
+    const workspace = path.join(stateDir, "workspace");
+    const first = path.join(workspace, "01-cover.png");
+    const second = path.join(workspace, "02-detail.png");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(first, "first image bytes");
+    await writeFile(second, "second image bytes");
+    const channel = fakeChannel();
+    const bridge: LarkBridgeLike = {
+      handleAuthorizedMessage: vi.fn(async (input) => {
+        const directive = [
+          "```tool-call",
+          JSON.stringify({
+            name: "send.batch",
+            payload: {
+              files: [
+                { path: first, caption: "P1 封面" },
+                { path: second, caption: "P2 内页" },
+              ],
+            },
+          }),
+          "```",
+        ].join("\n");
+        await input.onEngineEvent?.({ type: "assistant_text", text: directive, delta: true });
+        throw new Error("API error (attempt 1): UNAVAILABLE (code 503): No capacity available for model");
+      }),
+    };
+
+    try {
+      await expect(handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_streamed_file_images_partial", content: "生成两张图" }),
+      })).resolves.toBe(true);
+
+      expect(imageCreateMock(channel)).toHaveBeenCalledTimes(2);
+      const imageCards = (channel.send.mock.calls as unknown[][])
+        .map((call) => (call[1] as { card?: { body?: { elements?: Array<Record<string, unknown>> } } } | undefined)?.card)
+        .filter((card): card is { body: { elements: Array<Record<string, unknown>> } } =>
+          Boolean(card?.body?.elements?.some((element) => element.tag === "img")));
+      expect(imageCards).toHaveLength(1);
+      expect(imageCards[0]!.body.elements).toEqual([
+        { tag: "markdown", content: "P1 封面" },
+        { tag: "img", img_key: "img_key_fake", alt: { tag: "plain_text", content: "P1 封面" } },
+        { tag: "markdown", content: "P2 内页" },
+        { tag: "img", img_key: "img_key_fake", alt: { tag: "plain_text", content: "P2 内页" } },
+      ]);
+      expect((channel.send.mock.calls as unknown[][]).some((call) => {
+        const payload = call[1] as { file?: unknown } | undefined;
+        return payload?.file !== undefined;
+      })).toBe(false);
+
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "engine.event",
+        outcome: "recovered",
+        detail: "streamed_artifact_partial_recovered",
+      }));
+      expect(timeline).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "file.accepted", metadata: expect.objectContaining({ kind: "image" }) }),
+      ]));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not deliver buffered follow-up artifacts after a user stop", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-followup-stopped-"));
     const workspace = path.join(stateDir, "workspace");

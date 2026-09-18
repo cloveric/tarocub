@@ -38,4 +38,27 @@ describe("Lark delivery preflight", () => {
       field: "files",
     });
   });
+
+  it("repairs image paths accidentally placed in send.batch files while keeping send.file explicit", () => {
+    expect(normalizeLarkSendTool("send.batch", {
+      files: [
+        { path: "/workspace/p1.png", caption: "P1 cover" },
+        "/workspace/p2.JPEG",
+        "/workspace/report.pdf",
+      ],
+    })).toEqual({
+      ok: true,
+      artifacts: [
+        { path: "/workspace/p1.png", kind: "image", caption: "P1 cover" },
+        { path: "/workspace/p2.JPEG", kind: "image" },
+        { path: "/workspace/report.pdf", kind: "file" },
+      ],
+      message: "",
+    });
+    expect(normalizeLarkSendTool("send.file", { path: "/workspace/p1.png" })).toEqual({
+      ok: true,
+      artifacts: [{ path: "/workspace/p1.png", kind: "file" }],
+      message: "",
+    });
+  });
 });
