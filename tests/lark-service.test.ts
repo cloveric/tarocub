@@ -1170,6 +1170,92 @@ describe("lark service", () => {
     }
   }, 15_000);
 
+  it("waits for an explicitly announced follow-up image and runs both messages as ONE turn", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-announced-image-"));
+    const resourceCalls: Array<{ messageId: string; fileKey: string }> = [];
+    const channel = fakeChannel({
+      rawClient: {
+        im: {
+          v1: {
+            messageResource: {
+              get: vi.fn(async (args: { path: { message_id: string; file_key: string } }) => {
+                resourceCalls.push({ messageId: args.path.message_id, fileKey: args.path.file_key });
+                return { getReadableStream: () => Readable.from([Buffer.from("signature-bytes")]) };
+              }),
+            },
+          },
+        },
+      },
+    });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async (input: { text: string; files: string[] }) => ({ text: `received ${input.files.length}` })),
+    };
+    const runtime = createLarkServiceRuntime();
+    const send = (overrides: Parameters<typeof fakeLarkMessage>[0]) =>
+      handleLarkMessage({ channel, bridge, runtime, stateDir, message: fakeLarkMessage(overrides) });
+
+    try {
+      const instruction = send({
+        messageId: "om_instruction",
+        content: "我发你个图，帮我把名字抠出来，背景要透明",
+        rawContentType: "text",
+      });
+      await vi.waitFor(() => expect(runtime.pendingBatches.size).toBe(1));
+      const image = send({
+        messageId: "om_signature",
+        content: "",
+        rawContentType: "image",
+        resources: [{ type: "image", fileKey: "key_signature" }],
+      });
+      await Promise.all([instruction, image]);
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const input = bridge.handleAuthorizedMessage.mock.calls[0]![0] as { text: string; files: string[] };
+      expect(input.text).toContain("帮我把名字抠出来");
+      expect(input.files).toHaveLength(1);
+      expect(resourceCalls).toEqual([{ messageId: "om_signature", fileKey: "key_signature" }]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it("releases an announced attachment request when no attachment arrives", async () => {
+    vi.useFakeTimers();
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-announced-image-timeout-"));
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "continue without attachment" })),
+    };
+    const runtime = createLarkServiceRuntime();
+
+    try {
+      const turn = handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_no_attachment",
+          content: "我稍后发一个文件，请帮我检查",
+          rawContentType: "text",
+        }),
+      });
+      await vi.waitFor(() => expect(runtime.pendingBatches.size).toBe(1));
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      await turn;
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(runtime.pendingBatches.size).toBe(0);
+    } finally {
+      for (const batch of runtime.pendingBatches.values()) clearTimeout(batch.timer);
+      runtime.pendingBatches.clear();
+      vi.useRealTimers();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps same-named files from a merged burst distinct instead of overwriting", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-burst-collide-"));
     const channel = fakeChannel({

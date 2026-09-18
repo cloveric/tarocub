@@ -53,6 +53,7 @@ export interface PendingLarkBatch {
   normalized: LarkNormalizedBridgeMessage;
   members: LarkNormalizedBridgeMessage[];
   texts: string[];
+  awaitingAttachment: boolean;
   onWait: (event: ChatQueueWaitEvent) => Promise<void>;
   timer: ReturnType<typeof setTimeout>;
   resolve: Array<(value: boolean) => void>;

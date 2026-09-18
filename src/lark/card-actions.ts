@@ -637,8 +637,9 @@ function callbackBehavior(value: Record<string, unknown>): Record<string, unknow
 }
 
 /**
- * Cancel a conversation's PENDING attachment burst (the always-on quiet window
- * that coalesces a multi-image send plus its caption into one turn).
+ * Cancel a conversation's PENDING attachment batch (the quiet window that
+ * coalesces a multi-image send plus its caption, or waits for an explicitly
+ * announced follow-up attachment, before creating one turn).
  *
  * A burst parked in its window is invisible to every stop control: /stop and the
  * card's stop button used to report "nothing running" and then the burst fired a

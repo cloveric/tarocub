@@ -727,7 +727,13 @@ async function runAcceptedLarkMessage(
   // suppressed (preemptActiveLarkTurnIfEnabled gets the original slash-shaped
   // commandText below, so isSlashCommand keeps it a no-op).
   if (!queueEscape && shouldBatchLarkMessage(input.runtime, effectiveNormalized, commandText)) {
-    return await scheduleBatchedLarkTurn(input, effectiveNormalized, messageLocale, handleConversationQueueWait);
+    return await scheduleBatchedLarkTurn(
+      input,
+      effectiveNormalized,
+      commandText,
+      messageLocale,
+      handleConversationQueueWait,
+    );
   }
 
   if (!queueEscape && await trySteerActiveLarkTurn(input, effectiveNormalized, commandText, messageLocale)) {
@@ -987,7 +993,7 @@ function shouldBatchLarkMessage(
   if (normalized.attachments.length > 0) {
     return true;
   }
-  return pending !== undefined;
+  return pending !== undefined || announcesUpcomingLarkAttachment(commandText);
 }
 
 async function preemptActiveLarkTurnIfEnabled(
@@ -1042,6 +1048,22 @@ async function preemptActiveLarkTurnIfEnabled(
 // connection, and the window RESETS on every join, so only the gap between
 // consecutive messages must fit — while a lone image only costs 0.5s latency.
 const LARK_ATTACHMENT_BURST_WINDOW_MS = 500;
+
+// A text-first request such as "我发你个图" and its image are separate Feishu
+// messages. Hold only explicit attachment announcements long enough for a human
+// to pick and send the file; ordinary text still enters the queue immediately.
+const LARK_ANNOUNCED_ATTACHMENT_WINDOW_MS = 15_000;
+
+function announcesUpcomingLarkAttachment(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const chineseAnnouncement = /(?:我(?:会|要|来|这就)?|这就|马上|待会儿?|等会儿?|稍后|随后|接着|下一(?:条|个)|下条).{0,8}(?:发(?!现|布|票|生|挥|明|起|热|言)|传|上传|补发|贴).{0,16}(?:截图|图片?|照片|文件|附件|文档|表格|压缩包|视频|音频|录音)/;
+  const englishAnnouncement = /\b(?:i(?:['’]ll| will| am going to|['’]m going to)?|let me|about to|next message(?: will)?)\s{0,3}(?:send|upload|attach|share|post)\b.{0,50}\b(?:image|photo|picture|screenshot|file|attachment|document|pdf|video|audio)\b/i;
+  return chineseAnnouncement.test(normalized) || englishAnnouncement.test(normalized);
+}
 
 const LARK_STEER_ACK_EMOJI = "OK";
 
@@ -1198,14 +1220,13 @@ function scheduleBatchedLarkTurn(
     reactionSettings?: LarkReactionSettings;
   },
   normalized: LarkNormalizedBridgeMessage,
+  commandText: string,
   locale: "zh" | "en",
   onWait: (event: ChatQueueWaitEvent) => Promise<void>,
 ): Promise<boolean> {
-  // Batch-mode uses the configured window; the always-on attachment burst uses
-  // its own quiet window when batch mode is off.
-  const windowMs = input.runtime.queuePolicy.batchWindowMs > 0
-    ? input.runtime.queuePolicy.batchWindowMs
-    : LARK_ATTACHMENT_BURST_WINDOW_MS;
+  const configuredWindowMs = input.runtime.queuePolicy.batchWindowMs;
+  const announcesAttachment = normalized.attachments.length === 0
+    && announcesUpcomingLarkAttachment(commandText);
   // Stamp each attachment with its carrier message: after a merge the batch's
   // messageId is the NEWEST member, but Feishu resource downloads require the
   // original carrier message_id for each file_key.
@@ -1216,6 +1237,13 @@ function scheduleBatchedLarkTurn(
   const existing = input.runtime.pendingBatches.get(normalized.conversationKey);
   if (existing) {
     clearTimeout(existing.timer);
+    if (configuredWindowMs <= 0) {
+      if (stampedAttachments.length > 0) {
+        existing.awaitingAttachment = false;
+      } else if (announcesAttachment) {
+        existing.awaitingAttachment = true;
+      }
+    }
     existing.normalized = {
       ...existing.normalized,
       messageId: normalized.messageId,
@@ -1227,6 +1255,11 @@ function scheduleBatchedLarkTurn(
     existing.texts.push(normalized.text);
     existing.members.push(normalized);
     existing.onWait = onWait;
+    const windowMs = configuredWindowMs > 0
+      ? configuredWindowMs
+      : existing.awaitingAttachment
+        ? LARK_ANNOUNCED_ATTACHMENT_WINDOW_MS
+        : LARK_ATTACHMENT_BURST_WINDOW_MS;
     return new Promise<boolean>((resolve, reject) => {
       existing.resolve.push(resolve);
       existing.reject.push(reject);
@@ -1237,6 +1270,12 @@ function scheduleBatchedLarkTurn(
     });
   }
 
+  const awaitingAttachment = configuredWindowMs <= 0 && announcesAttachment;
+  const windowMs = configuredWindowMs > 0
+    ? configuredWindowMs
+    : awaitingAttachment
+      ? LARK_ANNOUNCED_ATTACHMENT_WINDOW_MS
+      : LARK_ATTACHMENT_BURST_WINDOW_MS;
   return new Promise<boolean>((resolve, reject) => {
     const timer = setTimeout(() => {
       void flushBatchedLarkTurn(input, normalized.conversationKey, locale);
@@ -1246,6 +1285,7 @@ function scheduleBatchedLarkTurn(
       normalized: { ...normalized, attachments: stampedAttachments },
       members: [normalized],
       texts: [normalized.text],
+      awaitingAttachment,
       onWait,
       timer,
       resolve: [resolve],
