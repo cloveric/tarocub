@@ -52,21 +52,38 @@ features.
 - Integration protocol: persistent `kimi acp`
 - Client SDK: `@agentclientprotocol/sdk@1.4.0`
 
-TaroCub's real adapter created a new session, invoked the real Bash tool with a
-harmless `printf` command under the bridge's `full-auto` to ACP `yolo` mapping,
-and received the exact response marker without any permission callback. The
-session appeared in `session/list`; after the adapter and ACP process were
-destroyed, a fresh adapter validated it with `session/load` and completed a
-resumed turn with a second exact marker.
+The 2.0.0-to-2.0.1 source comparison spans 258 files, with 9,184 additions and
+1,079 deletions. The public `kimi acp` entry point is byte-identical and the
+entire `packages/acp-server` tree has no diff, but the internal agent-core
+permission, Hook-runner, Wire/history, media-tool, session-index, task-read,
+and workspace-watcher implementations do change. The Hook event names and
+input payload fields consumed by TaroCub are unchanged; the runner adds
+telemetry and an internal optional `errored` result flag when hook process
+startup or waiting fails.
 
-The 2.0.0-to-2.0.1 upstream diff does not change the ACP request, reverse
-request, session, or Hook contracts consumed by TaroCub. Its relevant runtime
-fixes keep in-turn follow-ups attached to their host turn, remove duplicate
-follow-ups after reload, avoid unnecessary Ask When Needed approval prompts
-for commands that cannot be statically analyzed, bound workspace file
-watching, and speed long-session indexing and resume. TaroCub queues Kimi
-follow-ups as separate ACP turns because ACP still exposes no client steering
-method, so no adapter compatibility shim is required. See the
+The affected paths were therefore exercised through TaroCub's real adapter and
+the installed 2.0.1 binary:
+
+- `session/new`, `session/list`, cross-process `session/load`, and a resumed
+  turn completed with exact markers;
+- a harmless but statically unanalyzable nested Bash command containing
+  `$HOME` ran under the bridge's `full-auto` to ACP `yolo` mapping with zero
+  approval callbacks or permission events;
+- a real background Bash task emitted exactly one Hook-derived start and one
+  matching terminal notification, with its exact output preserved;
+- `mcp__cctb_search__provider_status` returned a structured object result;
+- one ACP form delivered both a required single-select and multi-select field,
+  accepted the mapped answers, and resumed the turn;
+- cancelling a foreground 30-second Bash command returned the stopped-turn
+  error, after which the same persistent worker completed the next turn;
+- both the main agent and a delegated subagent read generated PNG markers with
+  `ReadMediaFile`, covering the release's media-tool availability change.
+
+The follow-up fixes concern Kimi's internal in-turn steering history. TaroCub
+cannot send an ACP steer and rejects concurrent prompts on one Kimi worker, so
+bridge follow-ups remain serialized as separate ACP turns. The new bounded
+watchers and session-index/restore optimizations require no bridge setting or
+schema change. No adapter compatibility shim is required. See the
 [2.0.1 release](https://github.com/MoonshotAI/kimi-code/releases/tag/%40moonshot-ai/kimi-code%402.0.1).
 After the live probes, the focused Kimi adapter, Hook relay, and workspace
 suites passed all 107 tests, the full repository suite passed 2,975 tests
@@ -794,8 +811,9 @@ covered by integration tests for a Kimi-configured instance:
   original session cwd persisted for the resumed turn;
 - Kimi 0.43 ACP form elicitation with complete multi-question and multi-select
   cards in Lark and Telegram, plus the older single-choice permission fallback;
-- Kimi 2.0.1 new/list/load plus a resumed turn, and a harmless Bash invocation
-  under ACP `yolo` with zero approval requests;
+- Kimi 2.0.1 new/list/load plus a resumed turn, the changed `yolo` permission
+  branch, Hook background lifecycle, Search MCP, full form elicitation,
+  cancellation and worker reuse, and main plus subagent image reading;
 - Kimi 2.0.0 cancellation followed by reuse of the same persistent worker and
   local image reading through the ordinary attachment path;
 - native workspace instructions, local skills, and the injected TaroCub Search
