@@ -651,6 +651,40 @@ describe("ClaudeStreamAdapter", () => {
     await expect(resultPromise).rejects.toThrow("Claude reported an error");
   });
 
+  it("does not expose internal reminders when a structured error contains only protocol text", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    const resultPromise = adapter.sendUserMessage("telegram-12345", {
+      text: "Fail",
+      files: [],
+    });
+
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData(JSON.stringify({
+      type: "result",
+      subtype: "error",
+      is_error: true,
+      result: [
+        "user<system-reminder>",
+        "[SYSTEM NOTIFICATION - NOT USER INPUT]",
+        "<task-notification>",
+        "<task-id>task-secret</task-id>",
+        "<output-file>/private/tmp/claude/task-secret.output</output-file>",
+        "</task-notification>",
+      ].join("\n"),
+      session_id: "session-123",
+    }) + "\n");
+
+    const error = await resultPromise.then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("Claude reported an error");
+  });
+
   it("surfaces stderr when Claude stream exits before completing a turn", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", {
@@ -931,7 +965,10 @@ describe("ClaudeStreamAdapter", () => {
       message: {
         content: [
           { type: "thinking", thinking: "private child reasoning" },
-          { type: "text", text: "child progress" },
+          {
+            type: "text",
+            text: "child progress\n\nuser<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nchild secret",
+          },
         ],
       },
       session_id: "session-123",
@@ -966,6 +1003,8 @@ describe("ClaudeStreamAdapter", () => {
     expect(events.some((event) => event.type === "thinking" && event.text === "private child reasoning")).toBe(false);
     expect(events.some((event) => event.type === "assistant_text" && event.text === "child progress")).toBe(false);
     expect(events.some((event) => event.type === "tool_result" && event.toolUseId === "child-tool")).toBe(false);
+    expect(JSON.stringify(events)).not.toContain("SYSTEM NOTIFICATION");
+    expect(JSON.stringify(events)).not.toContain("child secret");
   });
 
   it("surfaces and deduplicates Claude MCP startup errors", async () => {
@@ -1104,6 +1143,128 @@ describe("ClaudeStreamAdapter", () => {
       "type" in event &&
       event.type === "task_notification"
     )).toHaveLength(1);
+  });
+
+  it("strips echoed internal reminders from Claude background task reviews", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{ type?: string; text?: string }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const foreground = adapter.sendUserMessage("telegram-12345", {
+        text: "Run in background",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: {
+          content: [{
+            type: "tool_use",
+            id: "toolu-background",
+            name: "Bash",
+            input: { command: "sleep 5", run_in_background: true },
+          }],
+        },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData('{"type":"system","subtype":"task_started","task_id":"task-background","tool_use_id":"toolu-background","session_id":"session-123"}\n');
+      children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"Started.","session_id":"session-123"}\n');
+      await foreground;
+
+      children[0].stdout.emitData(JSON.stringify({
+        type: "user",
+        message: {
+          content: [
+            "<task-notification>",
+            "<task-id>task-background</task-id>",
+            "<tool-use-id>toolu-background</tool-use-id>",
+            "<status>completed</status>",
+            "</task-notification>",
+          ].join("\n"),
+        },
+        session_id: "session-123",
+        origin: { kind: "task-notification" },
+      }) + "\n");
+      const leakedText = [
+        "等三页跑完。",
+        "",
+        "user<system-reminder>",
+        "[SYSTEM NOTIFICATION - NOT USER INPUT]",
+        "This is an automated background-task event, NOT a message from the user.",
+        "<task-notification>",
+        "<task-id>task-background</task-id>",
+        "<output-file>/private/tmp/claude/tasks/task-background.output</output-file>",
+        "<status>completed</status>",
+        "</task-notification>",
+      ].join("\n");
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: leakedText }] },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData(JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: leakedText,
+        session_id: "session-123",
+        origin: { kind: "task-notification" },
+      }) + "\n");
+
+      await waitFor(() => events.some((event) => event.type === "task_notification"));
+      const notification = events.find((event) => event.type === "task_notification");
+      expect(notification?.text).toBe("等三页跑完。");
+      expect(JSON.stringify(notification)).not.toContain("system-reminder");
+      expect(JSON.stringify(notification)).not.toContain("task-notification");
+      expect(JSON.stringify(notification)).not.toContain("/private/tmp/claude");
+    } finally {
+      await adapter.destroy();
+    }
+  });
+
+  it("strips echoed internal reminders from foreground Claude answers", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const events: Array<{ type?: string; text?: string }> = [];
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    try {
+      const turn = adapter.sendUserMessage("telegram-12345", {
+        text: "Give me the result",
+        files: [],
+        onEngineEvent: (event) => {
+          events.push(event);
+        },
+      });
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      const leakedText = "可见结果。\n\nuser<system-reminder>\n[SYSTEM NOTIFICATION - NOT USER INPUT]\ninternal only";
+      children[0].stdout.emitData(JSON.stringify({
+        type: "assistant",
+        message: { content: [{ type: "text", text: leakedText }] },
+        session_id: "session-123",
+      }) + "\n");
+      children[0].stdout.emitData(JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: leakedText,
+        session_id: "session-123",
+      }) + "\n");
+
+      await expect(turn).resolves.toMatchObject({ text: "可见结果。" });
+      expect(events.filter((event) => event.type === "assistant_text")).toEqual([
+        expect.objectContaining({ text: "可见结果。" }),
+      ]);
+      expect(JSON.stringify(events)).not.toContain("SYSTEM NOTIFICATION");
+    } finally {
+      adapter.destroy();
+    }
   });
 
   it("does not retain foreground Bash calls that Claude temporarily promotes to tasks", async () => {

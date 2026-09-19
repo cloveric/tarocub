@@ -123,15 +123,15 @@ export function cloudAsrAgentInstruction(): string | undefined {
 
 export function larkAgentInstructions(requestText = ""): string {
   const lines = [
-    "<lark_context>/<lark_comment_context> are routing only; <forwarded_lark_messages> is the task.",
-    "Default: concise text reply; no progress placeholder cards; ask if auth/scopes/tools missing.",
-    "Use `lark-cli` for Lark-native work: Docs/Calendar/Drive/Sheets/OAuth; NOT IM on this bot's own chats (separate app → open_id cross app; /newgroup + send tags). Sheets: start `sheets +workbook-info`; structured Sheets values; do not treat Sheets as Docs/Base. OAuth private only.",
-    "Bridge: [send-file:/absolute/path], [send-image:/absolute/path], send.file/send.image/send.audio/send.video; batch:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p.png\",\"caption\":\"P\"}]}}\n```\nPictures use `images`, not `files`. Never emit `[send.batch=...]`. lark.choice or `request_user_input`; Claude/Kimi/DeepSeek `AskUserQuestion` → Feishu card. Do not call `lark-cli` just to send choice cards. Small text: fenced `file:name.ext`. Background jobs: verify output, not exit status; repair empty/all-zero/corrupt results; final stdout must include exact delivery tags + one user-facing conclusion; `saved PATH` is not delivery.",
-    "Send is workspace-sandboxed; if outside, copy it into your workspace first.",
+    "<lark_context>/<lark_comment_context>: routing only; <forwarded_lark_messages>: task.",
+    "Default: concise text reply; no progress placeholder cards; ask if missing auth/scopes/tools.",
+    "Use `lark-cli` for Lark-native work: Docs/Calendar/Drive/Sheets/OAuth; NOT IM on this bot's own chats: open_id cross app; /newgroup + send tags. Sheets: start `sheets +workbook-info`; structured Sheets values; do not treat Sheets as Docs/Base. OAuth private only.",
+    "Bridge: [send-file:/absolute/path], [send-image:/absolute/path], send.file/send.image/send.audio/send.video; batch:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p.png\",\"caption\":\"P\"}]}}\n```\nPictures use `images`, not `files`. Never emit `[send.batch=...]`. lark.choice or `request_user_input`; Claude/Kimi/DeepSeek `AskUserQuestion` → Feishu card. Do not call `lark-cli` just to send choice cards. Small: fenced `file:name.ext`. Background: one job/batch; no nested/page/poll waiters; silent progress; one verified final notice. Verify output, not exit status; repair empty/all-zero/corrupt results; final stdout must include exact delivery tags + one user-facing conclusion; `saved PATH` is not delivery.",
+    "Send workspace-sandboxed; outside: copy it into your workspace first.",
     "title each via send.batch {path,caption} or title line directly above [send-image:]. ONE titled batch -> ONE card. send.batch: max 120 MiB per call; split larger payloads into multiple calls; each path once. exactly one syntax per artifact; never repeat a path unless explicitly asked to resend.",
-    "Lark cards do not render LaTeX; never use `$...$`/`\\text{}`; use Unicode math symbols (`÷`, `×`, `≈`, `≤`, `≥`).",
-    "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`, no `chatId`/`userId`; `at` uses ISO timezone. Recurring/window: exactly one 5-field `cron` (no seconds/year), never one-shot current minute/end boundary. Manage cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
-    "Web/current facts: exact URL(s): read them directly with `web_extract`/browser; blocked/dynamic: fall back to Scrapling (`scrapling extract`). No exact URL or read failure: use `web_search` for discovery/current facts and say so.",
+    "Lark cards do not render LaTeX; never use `$...$`/`\\text{}`; Unicode math symbols: (`÷`, `×`, `≈`, `≤`, `≥`).",
+    "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`; no `chatId`/`userId`; `at`: ISO timezone. Recurring/window: one 5-field cron; no seconds/year/current-minute/end-boundary one-shots. Manage cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
+    "Web/current: exact URL(s): read them directly with `web_extract`/browser; blocked/dynamic: fall back to Scrapling (`scrapling extract`); otherwise use `web_search` for discovery/current facts and say so.",
   ];
   const asr = localAsrAgentInstruction();
   if (asr) {

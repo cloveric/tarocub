@@ -286,6 +286,26 @@ function appendAssistantText(existing: string, next: string): string {
   return existing ? `${existing}\n${next}` : next;
 }
 
+/**
+ * Claude task-review turns can occasionally echo their synthetic user frame
+ * into assistant text. Those frames contain internal reminders, task ids, and
+ * temporary paths that must never cross the user-visible delivery boundary.
+ */
+function sanitizeClaudeUserVisibleText(text: string): string {
+  return text
+    .replace(
+      /(?:^|\n)[\t ]*(?:user|assistant)?[\t ]*<system-reminder>[\s\S]*?(?:<\/system-reminder>|$)/gi,
+      "\n",
+    )
+    .replace(
+      /(?:^|\n)[\t ]*<task-notification>[\s\S]*?(?:<\/task-notification>|$)/gi,
+      "\n",
+    )
+    .replace(/[\t ]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function readClaudeMcpServerWarnings(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -1162,9 +1182,10 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       if (metadata.toolUseId) {
         worker.explicitBackgroundToolUseIds.delete(metadata.toolUseId);
       }
-      const resultText = parsed.result
+      const rawResultText = parsed.result
         ? mergeIntermediateDeliveryText(parsed.result, worker.taskNotificationDeliveryText)
         : worker.taskNotificationAssistantText;
+      const resultText = sanitizeClaudeUserVisibleText(rawResultText);
       worker.taskNotificationAssistantText = "";
       worker.taskNotificationDeliveryText = "";
       const text = renderBackgroundTaskTurnResult(metadata, resultText);
@@ -1228,14 +1249,18 @@ export class ClaudeStreamAdapter implements CodexAdapter {
           continue;
         }
         if (item.type === "text" && typeof item.text === "string" && item.text) {
+          const visibleText = sanitizeClaudeUserVisibleText(item.text);
+          if (!visibleText) {
+            continue;
+          }
           worker.taskNotificationAssistantText = appendAssistantText(
             worker.taskNotificationAssistantText,
-            item.text,
+            visibleText,
           );
-          if (hasDeliveryTag(item.text)) {
+          if (hasDeliveryTag(visibleText)) {
             worker.taskNotificationDeliveryText = appendAssistantText(
               worker.taskNotificationDeliveryText,
-              item.text,
+              visibleText,
             );
           }
         }
@@ -1264,10 +1289,11 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       if (worker.pendingTurn) {
         this.clearBackgroundTaskTurnSettlement(worker.pendingTurn);
         if (parsed.type === "assistant") {
-          const text = (parsed.message?.content ?? [])
+          const rawText = (parsed.message?.content ?? [])
             .filter((item) => item.type === "text" && typeof item.text === "string")
             .map((item) => item.text as string)
             .join("");
+          const text = sanitizeClaudeUserVisibleText(rawText);
           if (text) {
             this.emitEngineEvent(worker, {
               type: "tool_progress",
@@ -1326,7 +1352,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
           textParts.push(item.text);
         }
       }
-      const text = textParts.join("");
+      const text = sanitizeClaudeUserVisibleText(textParts.join(""));
       if (text) {
         worker.pendingTurn.assistantText = appendAssistantText(worker.pendingTurn.assistantText, text);
         if (hasDeliveryTag(text)) {
@@ -1387,13 +1413,20 @@ export class ClaudeStreamAdapter implements CodexAdapter {
         worker.pendingTurn = null;
         this.markWorkerActivity(worker);
         this.clearPendingTurnTimeout(pending);
-        const detail = parsed.result?.trim() || pending.assistantText.trim() || renderClaudeStreamError(parsed, worker.stderrTail);
+        const renderedError = sanitizeClaudeUserVisibleText(
+          renderClaudeStreamError(parsed, worker.stderrTail),
+        );
+        const detail = sanitizeClaudeUserVisibleText(parsed.result ?? "")
+          || pending.assistantText.trim()
+          || renderedError
+          || "Claude reported an error";
         pending.reject(new Error(appendClaudeMcpWarnings(detail, pending.engineWarnings)));
         return;
       }
-      const resultText = parsed.result
+      const rawResultText = parsed.result
         ? mergeIntermediateDeliveryText(parsed.result, pending.intermediateDeliveryText)
         : pending.assistantText;
+      const resultText = sanitizeClaudeUserVisibleText(rawResultText);
       // A direct-result turn has no streamed answer block. When an init warning
       // created one, seed the actual result explicitly so the run card cannot
       // finish showing only the warning.

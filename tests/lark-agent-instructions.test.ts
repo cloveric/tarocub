@@ -227,7 +227,10 @@ describe("larkAgentInstructions", () => {
   it("tells background jobs to validate output and emit delivery tags", () => {
     const instructions = larkAgentInstructions();
 
-    expect(instructions).toContain("Background jobs: verify output, not exit status");
+    expect(instructions).toContain("Background: one job/batch");
+    expect(instructions).toContain("no nested/page/poll waiters");
+    expect(instructions).toContain("one verified final notice");
+    expect(instructions).toContain("Verify output, not exit status");
     expect(instructions).toContain("final stdout must include exact delivery tags");
     expect(instructions).toContain("saved PATH");
     expect(instructions).toContain("empty/all-zero/corrupt results");
