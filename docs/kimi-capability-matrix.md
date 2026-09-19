@@ -6,21 +6,23 @@ aligned or an explicit gap. Initial protocol discovery used Kimi Code CLI
 0.31.1; background-task hooks were re-probed with 0.32.0; the full
 ACP/MCP/tool/hook path was re-probed on 0.33.0; and terminal delegation plus the
 initial stdio MCP compatibility boundary were re-probed on 0.37.2. The current
-compatibility baseline is 2.0.0 with ACP TypeScript SDK 1.4.0. New/list/load,
-streamed thought/text, cancellation followed by worker reuse, and local image
-attachment reading were re-verified on 2.0.0; the 0.43.0 probe additionally
-covered Search MCP, full form elicitation, and background Agent completion. The
-0.41 permission and detached-question semantics remain in force. Remaining
-gaps must still be re-probed before removal.
+compatibility baseline is 2.0.1 with ACP TypeScript SDK 1.4.0. New/list/load, a
+resumed turn, and a harmless Bash invocation under ACP `yolo` with zero
+approval requests were re-verified on 2.0.1. The 2.0.0 probe covered streamed
+thought/text, cancellation followed by worker reuse, and local image attachment
+reading; the 0.43.0 probe additionally covered Search MCP, full form
+elicitation, and background Agent completion. The 0.41 permission and
+detached-question semantics remain in force. Remaining gaps must still be
+re-probed before removal.
 
 | Capability | Codex | Claude Code | Kimi Code alignment |
 |---|---|---|---|
-| Runtime transport | Persistent app-server by default; process fallback | Persistent stream-json worker | **Aligned:** persistent `kimi acp` worker with JSON-RPC framing; Kimi 2.0.0's default `agent-core-v2` path is live-verified with ACP SDK 1.4.0 |
+| Runtime transport | Persistent app-server by default; process fallback | Persistent stream-json worker | **Aligned:** persistent `kimi acp` worker with JSON-RPC framing; Kimi 2.0.1's default `agent-core-v2` path is live-verified with ACP SDK 1.4.0 |
 | Local authentication | Codex home and native login | Claude config and native login | **Aligned:** native Kimi credentials and `KIMI_CODE_HOME`; TaroCub stores no provider token |
 | Text streaming | App-server/process events | Stream-json events | **Aligned:** ACP `agent_message_chunk` -> shared `assistant_text` events |
 | Thinking streaming | App-server reasoning events | Stream-json thinking events | **Aligned:** ACP `agent_thought_chunk` -> shared `thinking` events |
 | Tool lifecycle | Structured tool events | Structured tool events | **Aligned:** ACP `tool_call` and `tool_call_update` -> shared tool events |
-| Delegated terminal lifecycle | Runtime terminal/process tools | Runtime terminal/process tools | **Aligned:** first live-verified on Kimi 0.37.2 and retained under the 2.0.0 compatibility baseline; TaroCub serves ACP terminal create, bounded UTF-8 output, wait, kill, and release requests, while worker teardown kills unreleased process trees. In `full-auto`/ACP `yolo`, the resolved terminal cwd must remain inside the resolved workspace; this is a cwd boundary, not an OS sandbox |
+| Delegated terminal lifecycle | Runtime terminal/process tools | Runtime terminal/process tools | **Aligned:** first live-verified on Kimi 0.37.2 and retained under the 2.0.1 compatibility baseline; TaroCub serves ACP terminal create, bounded UTF-8 output, wait, kill, and release requests, while worker teardown kills unreleased process trees. In `full-auto`/ACP `yolo`, the resolved terminal cwd must remain inside the resolved workspace; this is a cwd boundary, not an OS sandbox |
 | Background tasks | Structured start/completion events | Structured start/completion events | **Aligned on Kimi 0.32+:** an authenticated loopback relay maps task and turn lifecycle hooks into shared events. On Kimi 0.33, TaroCub retains the synthetic task-origin ACP turn, associates automatic retries, records intermediate failures without user delivery, and emits one final reviewed result. Tool-result metadata remains the start fallback, detached Bash fallback notices include bounded real output, explicit successful workspace artifacts enter the shared delivery layer, lost reviews expire, terminal tombstones suppress late/duplicate events, and identity is scoped by conversation, session, and task ID across every Lark turn surface |
 | Background liveness | Runtime task state | Runtime task state | **Aligned without false progress:** active tasks retain their ACP worker and protect restarts until a terminal notification; accepted hooks drain before fallback decisions and worker shutdown, while `SessionHeartbeat` is intentionally ignored because process liveness is not task progress. Silence alone never kills a retained worker |
 | Stop/cancel | Runtime interrupt/abort | Worker abort | **Aligned:** ACP `session/cancel`, then process termination after the grace period |

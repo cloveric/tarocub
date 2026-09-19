@@ -198,12 +198,14 @@ override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
 exposes local Codex skills to bridge-owned Kimi workspaces and injects the
 built-in Search MCP alongside Kimi's native MCP/plugins.
 
-The current compatibility baseline is **Kimi Code 2.0.0** with
-`@agentclientprotocol/sdk` 1.4.0. A live 2.0.0 ACP probe verified
-`session/new`, streamed thought/text, `session/list`, cross-process
-`session/load`, cancellation followed by worker reuse, and local image
-attachment reading through the real adapter. No ACP compatibility shim was
-required. The preceding 0.43.0 probe also verified structured questions,
+The current compatibility baseline is **Kimi Code 2.0.1** with
+`@agentclientprotocol/sdk` 1.4.0. A live 2.0.1 ACP probe verified
+`session/new`, `session/list`, cross-process `session/load`, a resumed turn,
+and a real harmless Bash invocation under ACP `yolo` with zero approval
+requests. The patch does not change the ACP or Hook contracts consumed by
+TaroCub, so no compatibility shim is required. The preceding 2.0.0 probe also
+verified streamed thought/text, cancellation followed by worker reuse, and
+local image attachment reading; the 0.43.0 probe covered structured questions,
 Search MCP execution, and exactly-once background Agent completion. Kimi
 0.43's standard ACP form elicitation was verified end to end with two
 questions, including multi-select and distinct display labels/wire values.

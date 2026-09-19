@@ -44,6 +44,34 @@ ACP was verified to provide:
 This is sufficient to build the adapter without simulating unavailable Kimi
 features.
 
+## Kimi 2.0.1 Compatibility Re-probe
+
+- Probe date: 2026-09-19
+- Binary: `~/.kimi-code/bin/kimi`
+- Version: `2.0.1`
+- Integration protocol: persistent `kimi acp`
+- Client SDK: `@agentclientprotocol/sdk@1.4.0`
+
+TaroCub's real adapter created a new session, invoked the real Bash tool with a
+harmless `printf` command under the bridge's `full-auto` to ACP `yolo` mapping,
+and received the exact response marker without any permission callback. The
+session appeared in `session/list`; after the adapter and ACP process were
+destroyed, a fresh adapter validated it with `session/load` and completed a
+resumed turn with a second exact marker.
+
+The 2.0.0-to-2.0.1 upstream diff does not change the ACP request, reverse
+request, session, or Hook contracts consumed by TaroCub. Its relevant runtime
+fixes keep in-turn follow-ups attached to their host turn, remove duplicate
+follow-ups after reload, avoid unnecessary Ask When Needed approval prompts
+for commands that cannot be statically analyzed, bound workspace file
+watching, and speed long-session indexing and resume. TaroCub queues Kimi
+follow-ups as separate ACP turns because ACP still exposes no client steering
+method, so no adapter compatibility shim is required. See the
+[2.0.1 release](https://github.com/MoonshotAI/kimi-code/releases/tag/%40moonshot-ai/kimi-code%402.0.1).
+After the live probes, the focused Kimi adapter, Hook relay, and workspace
+suites passed all 107 tests, the full repository suite passed 2,975 tests
+across 166 files with one skip, and the TypeScript build passed.
+
 ## Kimi 2.0.0 Compatibility Re-probe
 
 - Probe date: 2026-09-18
@@ -766,6 +794,8 @@ covered by integration tests for a Kimi-configured instance:
   original session cwd persisted for the resumed turn;
 - Kimi 0.43 ACP form elicitation with complete multi-question and multi-select
   cards in Lark and Telegram, plus the older single-choice permission fallback;
+- Kimi 2.0.1 new/list/load plus a resumed turn, and a harmless Bash invocation
+  under ACP `yolo` with zero approval requests;
 - Kimi 2.0.0 cancellation followed by reuse of the same persistent worker and
   local image reading through the ordinary attachment path;
 - native workspace instructions, local skills, and the injected TaroCub Search
