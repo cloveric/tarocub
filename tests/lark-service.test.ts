@@ -12570,6 +12570,7 @@ describe("lark service", () => {
       expect(updates).toContain("部分完成");
       expect(updates).toContain("发言稿初稿已完成。");
       expect(updates).toContain("以上内容可能不完整");
+      expect(updates).toContain("所选模型当前容量已满");
       expect(updates).not.toContain("执行失败");
       expect(channel.addReaction).toHaveBeenCalledWith("om_stream_then_fail", "ERROR");
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));

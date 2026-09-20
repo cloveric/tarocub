@@ -158,6 +158,8 @@ export function classifyFailure(error: unknown): FailureCategory {
   if (
     text.includes("api error: 529") ||
     text.includes("api_error_status=529") ||
+    text.includes("selected model is at capacity") ||
+    text.includes("no capacity available for model") ||
     (text.includes("overloaded") && (text.includes("api error") || text.includes("claude") || text.includes("codex")))
   ) {
     return "engine-backend";

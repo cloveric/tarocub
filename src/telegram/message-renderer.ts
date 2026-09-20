@@ -504,6 +504,12 @@ export function renderCategorizedErrorMessage(
 ): string {
   const normalizedDetail = detail.toLowerCase();
   const isAntigravity = engine === "antigravity";
+  const isModelCapacity =
+    category === "engine-backend" &&
+    (
+      normalizedDetail.includes("selected model is at capacity") ||
+      normalizedDetail.includes("no capacity available for model")
+    );
   const isUnsupportedAntigravityFlag =
     isAntigravity &&
     category === "engine-cli" &&
@@ -547,7 +553,9 @@ export function renderCategorizedErrorMessage(
         : "错误：Telegram 投递暂时不可用，请稍后重试。";
     }
     if (category === "engine-backend") {
-      return "错误：引擎服务暂时过载或连接中断，请稍后再试；无需重启实例。";
+      return isModelCapacity
+        ? "错误：所选模型当前容量已满。请稍后重试，或临时切换模型；无需重启实例。"
+        : "错误：引擎服务暂时过载或连接中断，请稍后再试；无需重启实例。";
     }
     if (category === "engine-quota") {
       return engine === "kimi"
@@ -603,7 +611,9 @@ export function renderCategorizedErrorMessage(
       : "Error: Telegram delivery is temporarily unavailable. Retry the request or try again later.";
   }
   if (category === "engine-backend") {
-    return "Error: The engine backend is temporarily overloaded or disconnected. Retry later; restarting the instance is not required.";
+    return isModelCapacity
+      ? "Error: The selected model is temporarily at capacity. Retry shortly or switch models; restarting the instance is not required."
+      : "Error: The engine backend is temporarily overloaded or disconnected. Retry later; restarting the instance is not required.";
   }
   if (category === "engine-quota") {
     return engine === "kimi"

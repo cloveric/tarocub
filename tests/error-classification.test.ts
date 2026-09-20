@@ -103,6 +103,10 @@ describe("classifyFailure specificity", () => {
     expect(classifyFailure(new Error("codex stream error\nReconnecting... 4/5"))).toBe("engine-backend");
     expect(classifyFailure(new Error("API Error: 529 Overloaded"))).toBe("engine-backend");
     expect(classifyFailure(new Error("Claude reported an error (api_error_status=529)"))).toBe("engine-backend");
+    expect(classifyFailure(new Error("Selected model is at capacity. Please try a different model."))).toBe("engine-backend");
+    expect(
+      classifyFailure(new Error("API error (attempt 1): UNAVAILABLE (code 503): No capacity available for model")),
+    ).toBe("engine-backend");
     // a process/startup failure is still engine-cli, not engine-backend
     expect(classifyFailure(new Error("Codex runtime process failed to start"))).not.toBe("engine-backend");
     // a bare reconnect mention without an N/M attempt counter is NOT this category
@@ -115,6 +119,20 @@ describe("classifyFailure specificity", () => {
     expect(renderLarkUserFacingError(err, "engine", "zh")).toContain("请重试");
     expect(renderLarkUserFacingError(err, "engine", "zh")).not.toContain("本轮运行失败");
     expect(renderLarkUserFacingError(err, "engine", "en")).toContain("backend connection");
+  });
+
+  it("renders model-capacity failures with actionable retry guidance", () => {
+    const err = new Error("Selected model is at capacity. Please try a different model.");
+    const zh = renderLarkUserFacingError(err, "engine", "zh");
+    expect(zh).toContain("所选模型当前容量已满");
+    expect(zh).toContain("临时切换模型");
+    expect(zh).toContain("无需重启实例");
+    expect(zh).not.toContain("本轮运行失败");
+
+    const en = renderLarkUserFacingError(err, "engine", "en");
+    expect(en).toContain("selected model is temporarily at capacity");
+    expect(en).toContain("switch models");
+    expect(renderCategorizedErrorMessage("engine-backend", err.message, "zh")).toContain("所选模型当前容量已满");
   });
 
   it("classifies the single-turn time-cap timeout as engine-timeout, distinct from engine-cli", () => {

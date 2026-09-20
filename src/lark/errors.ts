@@ -41,6 +41,9 @@ export function renderLarkUserFacingError(
   const errorText = error instanceof Error ? `${error.name}\n${error.message}` : String(error);
   const isAntigravityAuth = category === "auth" && /(?:antigravity|\bagy\b)/i.test(errorText);
   const isKimiQuota = category === "engine-quota" && /(?:kimi|5-hour usage limit)/i.test(errorText);
+  const isModelCapacity =
+    category === "engine-backend" &&
+    /(?:selected model is at capacity|no capacity available for model)/i.test(errorText);
   if (category === "engine-thread-locked") {
     // The adapter already produced an operator-actionable explanation (who
     // holds the lock, what to do). Surfacing it verbatim is the whole point —
@@ -74,7 +77,9 @@ export function renderLarkUserFacingError(
       return "Error: engine runtime failed. Restart the instance and retry.";
     }
     if (category === "engine-backend") {
-      return "Error: Codex lost its backend connection (reconnect attempts exhausted). Please retry.";
+      return isModelCapacity
+        ? "Error: the selected model is temporarily at capacity. Retry shortly or switch models; restarting the instance is not required."
+        : "Error: Codex lost its backend connection (reconnect attempts exhausted). Please retry.";
     }
     if (category === "engine-quota") {
       return isKimiQuota
@@ -117,7 +122,9 @@ export function renderLarkUserFacingError(
     return "错误：引擎运行失败，请重启实例后重试。";
   }
   if (category === "engine-backend") {
-    return "错误：Codex 连接后端失败（重连耗尽），请重试。";
+    return isModelCapacity
+      ? "错误：所选模型当前容量已满。请稍后重试，或临时切换模型；无需重启实例。"
+      : "错误：Codex 连接后端失败（重连耗尽），请重试。";
   }
   if (category === "engine-quota") {
     return isKimiQuota
