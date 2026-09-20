@@ -299,6 +299,13 @@ function sumStepUsage(usages: Iterable<AdapterUsage>): AdapterUsage | undefined 
   return count > 0 ? total : undefined;
 }
 
+function hasOutstandingTool(emittedTools: Set<number>, completedTools: Set<number>): boolean {
+  for (const index of emittedTools) {
+    if (!completedTools.has(index)) return true;
+  }
+  return false;
+}
+
 function stringifyToolValue(value: unknown): string | undefined {
   if (typeof value === "string") return value;
   if (value === undefined || value === null) return undefined;
@@ -867,6 +874,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
             ...(worker.currentSessionId ? { sessionId: worker.currentSessionId } : {}),
           });
         }
+        this.armInactivityTimeout(worker, pending);
       }
       return;
     }
@@ -1043,6 +1051,9 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     if (pending.inactivityTimeout) clearTimeout(pending.inactivityTimeout);
     pending.inactivityTimeout = undefined;
     if (pending.timeoutDisabled || this.inactivityTimeoutMs === null || this.inactivityTimeoutMs <= 0) return;
+    // Antigravity emits no protocol heartbeat while a foreground tool is running.
+    // The total turn cap still bounds a genuinely wedged command.
+    if (hasOutstandingTool(pending.emittedTools, pending.completedTools)) return;
     pending.inactivityTimeout = setTimeout(() => {
       if (worker.pendingTurn !== pending) return;
       this.failAndStopWorker(worker, new Error(
@@ -1279,6 +1290,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         if (inactivityTimeout) clearTimeout(inactivityTimeout);
         inactivityTimeout = undefined;
         if (inactivityTimeoutMs === null) return;
+        if (hasOutstandingTool(emittedTools, completedTools)) return;
         inactivityTimeout = setTimeout(() => {
           rejectAndKill(new Error(
             `Antigravity process turn became inactive after ${Math.max(1, Math.round(inactivityTimeoutMs / 60_000))} minutes`,
@@ -1370,6 +1382,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
                 ...(sessionId ? { sessionId } : {}),
               });
             }
+            resetInactivityTimeout();
           }
           return;
         }

@@ -197,6 +197,71 @@ describe("ProcessAntigravityAdapter", () => {
     expect(terminalEvents).toHaveLength(1);
   });
 
+  it("does not declare a persistent turn inactive while a foreground tool is outstanding", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter(
+      "agy", { HOME: "/tmp/home" }, spawnAntigravity, undefined, undefined, undefined,
+      5_000, 200,
+    );
+    let settled = false;
+    const turn = adapter.sendUserMessage("telegram-12345", { text: "Run a long command", files: [] });
+    void turn.then(() => { settled = true; }, () => { settled = true; });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 2, state: "ACTIVE", step_type: "tool",
+        tool_name: "run_command", tool_info: { name: "run_command", parameters: { CommandLine: "sleep 60" } },
+      },
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(settled).toBe(false);
+
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 2, state: "DONE", step_type: "tool",
+        tool_name: "run_command", tool_info: { name: "run_command", output: "" },
+      },
+    }));
+    await expect(turn).rejects.toThrow("became inactive after 1 minutes");
+    expect(child.stdin.ended).toBe(true);
+  });
+
+  it("does not declare a native goal inactive while a foreground tool is outstanding", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter(
+      "agy", { HOME: "/tmp/home" }, spawnAntigravity, undefined, undefined, undefined,
+      5_000, 200,
+    );
+    let settled = false;
+    const turn = adapter.sendUserMessage("telegram-12345", { text: "/goal run a long command", files: [] });
+    void turn.then(() => { settled = true; }, () => { settled = true; });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 2, state: "ACTIVE", step_type: "tool",
+        tool_name: "run_command", tool_info: { name: "run_command", parameters: { CommandLine: "sleep 60" } },
+      },
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(settled).toBe(false);
+
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID, step_index: 2, state: "DONE", step_type: "tool",
+        tool_name: "run_command", tool_info: { name: "run_command", output: "" },
+      },
+    }));
+    await expect(turn).rejects.toThrow("became inactive after 1 minutes");
+  });
+
   it("uses streamed answer text when a successful result carries an empty response", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
