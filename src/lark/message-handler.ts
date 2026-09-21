@@ -67,6 +67,8 @@ import {
   deliverLarkUserInputRequest,
   hasLarkPostTurnDelivery,
   sendLarkMarkdown,
+  sendTrackedLarkChoiceCard,
+  trackLarkChoiceCard,
 } from "./delivery.js";
 import {
   isLarkDeliveryFollowupRequest,
@@ -1757,6 +1759,7 @@ async function runNormalizedLarkMessage(
           if (queuedRef) {
             delivered = await updateLarkQueueCardInPlace(input.channel, queuedRef, summaryCard);
             if (delivered) {
+              trackLarkChoiceCard(input.runtime, queuedRef.messageId, queuedRef.handle);
               // Taken over in place → drop tracking so the finally-block's
               // lingering-card settle won't recall the card we just reused.
               input.runtime.queueCards.delete(normalized.messageId);
@@ -1766,8 +1769,9 @@ async function runNormalizedLarkMessage(
             // (no orphaned "排队中" card left behind).
           }
           if (!delivered) {
-            await sendLarkCardWithFallback({
+            await sendTrackedLarkChoiceCard({
               channel: input.channel,
+              runtime: input.runtime,
               chatId: normalized.chatId,
               card: summaryCard,
               // Card delivery failed → keep the operator on the same short,

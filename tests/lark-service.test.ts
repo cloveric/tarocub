@@ -3025,6 +3025,7 @@ describe("lark service", () => {
         },
       });
 
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
       const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
       expect(bridgeInput.locale).toBe("en");
@@ -3032,6 +3033,114 @@ describe("lark service", () => {
       expect(bridgeInput.text).toContain("Extracted files live under:");
       expectLarkFinalAnswer(channel, "analysis from card done");
     } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("acknowledges a queued archive continuation immediately and ignores repeated taps", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-archive-card-dedupe-"));
+    const zipBuffer = createZipBuffer({
+      "README.md": "# hello",
+      "src/index.ts": "console.log('hi')",
+    });
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async () => zipBuffer),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "archive analysis done" })),
+    };
+    const runtime = createLarkServiceRuntime();
+    let releaseBlocker = (): void => undefined;
+    let resolveStarted = (): void => undefined;
+    const blockerStarted = new Promise<void>((resolve) => {
+      resolveStarted = resolve;
+    });
+    const blockerGate = new Promise<void>((resolve) => {
+      releaseBlocker = resolve;
+    });
+    let firstAction: Promise<boolean> | undefined;
+    let blocker: Promise<boolean> | undefined;
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_zip",
+          content: "分析这个压缩包",
+          resources: [{ type: "file", fileKey: "file_zip", fileName: "repo.zip" }],
+        }),
+      });
+      expect(runtime.choiceCards.get("sent_1")).toMatchObject({ status: "active" });
+
+      const workflowState = JSON.parse(await readFile(path.join(stateDir, "file-workflow.json"), "utf8")) as {
+        records: Array<{ uploadId: string }>;
+      };
+      const uploadId = workflowState.records[0]!.uploadId;
+      channel.send.mockClear();
+      channel.recallMessage.mockClear();
+
+      blocker = runtime.chatQueue.enqueue("lark:oc_chat", async () => {
+        resolveStarted();
+        await blockerGate;
+        return true;
+      });
+      await blockerStarted;
+
+      const actionInput = () => ({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          messageId: "sent_1",
+          chatId: "oc_chat",
+          operator: { openId: "ou_user" },
+          action: {
+            value: {
+              cctb_lark: "continue_archive",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              uploadId,
+            },
+          },
+        },
+      });
+
+      firstAction = handleLarkCardAction(actionInput());
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const firstResult = await Promise.race<boolean | "timeout">([
+        firstAction,
+        new Promise<"timeout">((resolve) => {
+          timeout = setTimeout(() => resolve("timeout"), 300);
+        }),
+      ]);
+      if (timeout) clearTimeout(timeout);
+      expect(firstResult).toBe(true);
+      await expect(handleLarkCardAction(actionInput())).resolves.toBe(true);
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+
+      await vi.waitFor(() => expect(channel.recallMessage).toHaveBeenCalledWith("sent_1"));
+      const acceptedCard = JSON.stringify(channel.send.mock.calls);
+      expect(acceptedCard).toContain("已开始深入分析");
+      expect(acceptedCard).not.toContain('"tag":"button"');
+      expect(acceptedCard).not.toContain('"cctb_lark":"continue_archive"');
+      expect(runtime.choiceCards.get("sent_1")).toMatchObject({
+        status: "resolved",
+        selectedLabel: "继续分析",
+      });
+
+      releaseBlocker();
+      await blocker;
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseBlocker();
+      await blocker?.catch(() => undefined);
+      await firstAction?.catch(() => undefined);
       await rm(stateDir, { recursive: true, force: true });
     }
   });
@@ -3066,11 +3175,11 @@ describe("lark service", () => {
         },
       });
 
-      expect(channel.send).toHaveBeenCalledWith(
+      await vi.waitFor(() => expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
         { markdown: "That archive is no longer waiting for continued analysis in this chat." },
         { replyTo: "om_card_missing" },
-      );
+      ));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -3137,6 +3246,7 @@ describe("lark service", () => {
         },
       });
 
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
       expect(channel.stream).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
@@ -14318,7 +14428,11 @@ describe("lark service", () => {
       })).resolves.toBe(true);
 
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
-      expect(channel.send).toHaveBeenCalledWith("oc_chat", { text: "已跳过排队中的任务。" }, { replyTo: "card_archive" });
+      await vi.waitFor(() => expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: "已跳过排队中的任务。" },
+        { replyTo: "card_archive" },
+      ));
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "turn.completed",

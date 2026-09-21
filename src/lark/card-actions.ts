@@ -1671,6 +1671,16 @@ export async function handleLarkCardAction(input: {
     })) {
       return true;
     }
+    const archiveCard = claimLarkChoiceCard(
+      input.runtime,
+      input.event.messageId,
+      locale === "en" ? "Continue Analysis" : "继续分析",
+    );
+    if (!archiveCard) {
+      // The first tap already owns this archive continuation. Acknowledge any
+      // repeated callback without enqueueing a duplicate analysis turn.
+      return true;
+    }
     const userId = stableLarkNumericId(`user:${larkOperatorRawId(input.event.operator)}`);
     await appendLarkCardActionInputEvent({
       stateDir: input.stateDir,
@@ -1683,7 +1693,19 @@ export async function handleLarkCardAction(input: {
       action: "continue_archive",
       metadata: { uploadId: value.uploadId },
     });
-    await input.runtime.chatQueue.enqueue(value.conversationKey, async () => {
+    settleLarkArchiveContinuationCard({
+      channel: input.channel,
+      chatId: input.event.chatId,
+      replyInThread,
+      locale,
+      ref: archiveCard,
+    });
+
+    // The callback must return before the archive turn finishes. Otherwise
+    // Lark times out the tap, leaves the button live, and the user reasonably
+    // sends a second /continue that only queues behind this already-running
+    // turn. The conversation queue still preserves execution order.
+    const queued = input.runtime.chatQueue.enqueue(value.conversationKey, async () => {
       await runLarkArchiveContinueCardAction({
         channel: input.channel,
         bridge: input.bridge!,
@@ -1719,6 +1741,7 @@ export async function handleLarkCardAction(input: {
         return true;
       },
     });
+    void queued.catch(() => undefined);
     return true;
   }
 
@@ -1917,6 +1940,57 @@ function settleLarkChoiceCard(input: {
   }
   // Legacy/plain cards cannot be updated reliably immediately after a tap.
   // Replace them with a read-only summary and recall the live-button card.
+  void postSummaryFallback().catch(() => undefined);
+}
+
+function renderLarkArchiveContinuationSubmittedCard(locale: Locale): Record<string, unknown> {
+  const title = locale === "en" ? "Archive analysis started" : "已开始深入分析";
+  const body = locale === "en"
+    ? "✅ The task is in this conversation's queue. Results will be sent automatically; do not click again or send `/continue`."
+    : "✅ 任务已进入当前会话队列。完成后会自动回复，无需再次点击或输入 `/continue`。";
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: title } },
+    header: {
+      template: "green",
+      title: { tag: "plain_text", content: `✅ ${title}` },
+    },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [{ tag: "markdown", content: body }],
+    },
+  };
+}
+
+function settleLarkArchiveContinuationCard(input: {
+  channel: LarkChannelLike;
+  chatId: string;
+  replyInThread?: boolean;
+  locale: Locale;
+  ref: LarkChoiceCardRef;
+}): void {
+  const submittedCard = renderLarkArchiveContinuationSubmittedCard(input.locale);
+  const postSummaryFallback = async (): Promise<void> => {
+    await sendLarkCardWithFallback({
+      channel: input.channel,
+      chatId: input.chatId,
+      card: submittedCard,
+      fallbackText: input.locale === "en"
+        ? "Archive analysis started. Results will be sent automatically; do not send /continue again."
+        : "已开始深入分析，完成后会自动回复，无需再次输入 /continue。",
+      options: larkReplyOptions(input.ref.messageId, input.replyInThread),
+      locale: input.locale,
+    });
+    if (input.channel.recallMessage) {
+      await input.channel.recallMessage(input.ref.messageId).catch(() => undefined);
+    }
+  };
+
+  if (input.ref.handle) {
+    settleThenUpdateManagedCard(input.channel, input.ref.handle, submittedCard, postSummaryFallback);
+    return;
+  }
   void postSummaryFallback().catch(() => undefined);
 }
 

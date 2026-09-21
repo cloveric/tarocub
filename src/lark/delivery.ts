@@ -90,7 +90,7 @@ export async function deliverLarkUserInputRequest(input: {
 
 const MAX_TRACKED_LARK_CHOICE_CARDS = 512;
 
-async function sendTrackedLarkChoiceCard(input: {
+export async function sendTrackedLarkChoiceCard(input: {
   channel: LarkChannelLike;
   runtime: LarkServiceRuntime;
   chatId: string;
@@ -114,7 +114,7 @@ async function sendTrackedLarkChoiceCard(input: {
   }
 }
 
-function trackLarkChoiceCard(
+export function trackLarkChoiceCard(
   runtime: LarkServiceRuntime,
   messageId: string,
   handle?: ManagedCardHandle,
