@@ -34,29 +34,49 @@ const FROZEN_SEND_BATCH_TOOL_CALL_BLOCK = [
   "```",
 ].join("\n");
 
-const REMINDER_TOOL_GUARDRAIL_SENTENCE =
+const FROZEN_REMINDER_TOOL_GUARDRAIL_SENTENCE_V1 =
+  "Only emit reminder tool tags when the user explicitly asks to schedule/remind; do not infer reminders from ordinary dates/times in analysis. `at` must be an ISO date-time with timezone, such as 2026-05-27T13:30:00+08:00.";
+
+const FROZEN_REMINDER_TOOL_GUARDRAIL_SENTENCE_V2 =
   "Only emit reminder tool tags when the user explicitly asks to schedule/remind; do not infer reminders from ordinary dates/times in analysis. `at` must be an ISO date-time with timezone, such as 2026-05-27T13:30:00+08:00. For anything recurring (every N minutes/hours, or repeating over a window) emit exactly ONE `cron` tag with a single STANDARD 5-field expression (`minute hour day-of-month month day-of-week` — NO seconds field, NO year field; croner rejects 6-7 field exprs so they silently never fire), e.g. every 15 minutes through the afternoon = `*/15 13-14 * * *` — never many one-shot `at`/`in` tags or one tag per interval; a single cron job still fires (and notifies) separately each time.";
 
 const GENERATED_INSTANCE_AGENT_INSTRUCTIONS = GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS;
 
-const NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE =
+const FROZEN_NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE =
   "Use native/session-local schedulers only if the user explicitly asks for non-Telegram scheduling.";
 
 const GENERATED_SCHEDULED_TASKS_BLOCKS = [
+  // These three predate the reminder guardrail. Keep their shipped bytes so
+  // old generated files remain recognizable after newer wording is added.
   [
     "## Scheduled Tasks",
     "",
-    `For Telegram reminders emit ${FROZEN_CRON_ADD_IN_TOOL_TAG}; payload needs \`prompt\` plus exactly one of \`in\`/\`at\`/\`cron\`, optional \`description\`, never \`chatId\`/\`userId\`. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} Let the bridge confirm. Use native/session-local schedulers only if explicitly asked.`,
+    `For Telegram reminders emit ${FROZEN_CRON_ADD_IN_TOOL_TAG}; payload needs \`prompt\` plus exactly one of \`in\`/\`at\`/\`cron\`, optional \`description\`, never \`chatId\`/\`userId\`. Let the bridge confirm. Use native/session-local schedulers only if explicitly asked.`,
   ].join("\n"),
   [
     "## Scheduled Tasks",
     "",
-    `For reminders or recurring tasks, emit one inline tool tag, such as ${FROZEN_CRON_ADD_IN_TOOL_TAG}, ${FROZEN_CRON_ADD_AT_TOOL_TAG}, or ${FROZEN_CRON_ADD_CRON_TOOL_TAG}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} The bridge confirms success or failure; do not claim scheduling succeeded in your own words. ${NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE}`,
+    `For reminders or recurring tasks, emit one inline tool tag, such as ${FROZEN_CRON_ADD_IN_TOOL_TAG}, ${FROZEN_CRON_ADD_AT_TOOL_TAG}, or ${FROZEN_CRON_ADD_CRON_TOOL_TAG}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. The bridge confirms success or failure; do not claim scheduling succeeded in your own words. ${FROZEN_NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE}`,
   ].join("\n"),
   [
     "## Scheduled Tasks",
     "",
-    `For reminders or recurring tasks, emit one inline tool tag, such as ${FROZEN_CRON_ADD_IN_TOOL_TAG}, ${FROZEN_CRON_ADD_AT_TOOL_TAG}, or ${FROZEN_CRON_ADD_CRON_TOOL_TAG}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} The bridge confirms success or failure; do not claim scheduling succeeded in your own words.`,
+    `For reminders or recurring tasks, emit one inline tool tag, such as ${FROZEN_CRON_ADD_IN_TOOL_TAG}, ${FROZEN_CRON_ADD_AT_TOOL_TAG}, or ${FROZEN_CRON_ADD_CRON_TOOL_TAG}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. The bridge confirms success or failure; do not claim scheduling succeeded in your own words.`,
+  ].join("\n"),
+  [
+    "## Scheduled Tasks",
+    "",
+    `For Telegram reminders emit ${FROZEN_CRON_ADD_IN_TOOL_TAG}; payload needs \`prompt\` plus exactly one of \`in\`/\`at\`/\`cron\`, optional \`description\`, never \`chatId\`/\`userId\`. ${FROZEN_REMINDER_TOOL_GUARDRAIL_SENTENCE_V2} Let the bridge confirm. Use native/session-local schedulers only if explicitly asked.`,
+  ].join("\n"),
+  [
+    "## Scheduled Tasks",
+    "",
+    `For reminders or recurring tasks, emit one inline tool tag, such as ${FROZEN_CRON_ADD_IN_TOOL_TAG}, ${FROZEN_CRON_ADD_AT_TOOL_TAG}, or ${FROZEN_CRON_ADD_CRON_TOOL_TAG}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. ${FROZEN_REMINDER_TOOL_GUARDRAIL_SENTENCE_V2} The bridge confirms success or failure; do not claim scheduling succeeded in your own words. ${FROZEN_NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE}`,
+  ].join("\n"),
+  [
+    "## Scheduled Tasks",
+    "",
+    `For reminders or recurring tasks, emit one inline tool tag, such as ${FROZEN_CRON_ADD_IN_TOOL_TAG}, ${FROZEN_CRON_ADD_AT_TOOL_TAG}, or ${FROZEN_CRON_ADD_CRON_TOOL_TAG}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. ${FROZEN_REMINDER_TOOL_GUARDRAIL_SENTENCE_V2} The bridge confirms success or failure; do not claim scheduling succeeded in your own words.`,
   ].join("\n"),
   [
     "## Scheduled Tasks",
@@ -96,10 +116,25 @@ const GENERATED_SCHEDULED_TASKS_BLOCKS = [
 ];
 
 const LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS = [
+  // v0.1.21-v0.1.28 compact template, before AskUserQuestion was banned.
   [
     "## Telegram Transport",
     "",
-    `Plain text; ask in chat. Tags when needed: file/image ${FROZEN_SEND_FILE_TOOL_TAG} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}. Reminder ${FROZEN_CRON_ADD_IN_TOOL_TAG} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage with \`[tool:{"name":"cron.list","payload":{}}]\`, \`[tool:{"name":"cron.remove","payload":{"query":"task text"}}]\`, \`[tool:{"name":"cron.remove","payload":{"id":"<job-id>"}}]\`, or \`[tool:{"name":"cron.toggle","payload":{"query":"task text"}}]\`; use query only when it uniquely identifies the task, list first if ambiguous, never invent IDs. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
+    `Plain text; ask in chat. Deliver: file/image ${FROZEN_SEND_FILE_TOOL_TAG} (\`send.image\` same), batch fenced \`tool-call\` {name:"send.batch",payload:{message?,images?,files?}}, small text fenced \`file:name.ext\`.`,
+    `Reminders only on explicit schedule/remind requests: emit ${FROZEN_CRON_ADD_IN_TOOL_TAG} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; \`at\` ISO timezone. Let bridge confirm; native schedulers only if explicitly asked.`,
+    "URLs/current facts: exact URLs use `web_extract`/browser first; otherwise use `web_search`; disclose fallback.",
+  ].join("\n"),
+  // v4.6.64-v0.1.20 used the shorter reminder guardrail.
+  [
+    "## Telegram Transport",
+    "",
+    `Plain text; ask in chat. Tags when needed: file/image ${FROZEN_SEND_FILE_TOOL_TAG} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}. Reminder ${FROZEN_CRON_ADD_IN_TOOL_TAG} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage with \`[tool:{"name":"cron.list","payload":{}}]\`, \`[tool:{"name":"cron.remove","payload":{"query":"task text"}}]\`, \`[tool:{"name":"cron.remove","payload":{"id":"<job-id>"}}]\`, or \`[tool:{"name":"cron.toggle","payload":{"query":"task text"}}]\`; use query only when it uniquely identifies the task, list first if ambiguous, never invent IDs. ${FROZEN_REMINDER_TOOL_GUARDRAIL_SENTENCE_V1} Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
+    "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
+  ].join("\n"),
+  [
+    "## Telegram Transport",
+    "",
+    `Plain text; ask in chat. Tags when needed: file/image ${FROZEN_SEND_FILE_TOOL_TAG} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}. Reminder ${FROZEN_CRON_ADD_IN_TOOL_TAG} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage with \`[tool:{"name":"cron.list","payload":{}}]\`, \`[tool:{"name":"cron.remove","payload":{"query":"task text"}}]\`, \`[tool:{"name":"cron.remove","payload":{"id":"<job-id>"}}]\`, or \`[tool:{"name":"cron.toggle","payload":{"query":"task text"}}]\`; use query only when it uniquely identifies the task, list first if ambiguous, never invent IDs. ${FROZEN_REMINDER_TOOL_GUARDRAIL_SENTENCE_V2} Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
     "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
   ].join("\n"),
   [
@@ -190,8 +225,32 @@ export interface InstanceAgentInstructionsUpgradeResult {
   backupPath?: string;
 }
 
+interface NormalizedAgentContent {
+  text: string;
+  originalOffsets: number[];
+}
+
+function normalizeAgentContent(content: string): NormalizedAgentContent {
+  let originalIndex = content.startsWith("\uFEFF") ? 1 : 0;
+  let text = "";
+  const originalOffsets = [originalIndex];
+
+  while (originalIndex < content.length) {
+    if (content[originalIndex] === "\r" && content[originalIndex + 1] === "\n") {
+      text += "\n";
+      originalIndex += 2;
+    } else {
+      text += content[originalIndex];
+      originalIndex += 1;
+    }
+    originalOffsets.push(originalIndex);
+  }
+
+  return { text, originalOffsets };
+}
+
 function trimForCompare(value: string): string {
-  return value.replace(/\r\n/g, "\n").trim();
+  return normalizeAgentContent(value).text.trim();
 }
 
 interface GeneratedTransportMatch {
@@ -216,20 +275,23 @@ function isBlockBoundary(content: string, start: number, end: number): boolean {
     && (end === content.length || content[end] === "\n");
 }
 
-function findKnownGeneratedTelegramTransportBlock(content: string, startIndex = 0): GeneratedTransportMatch | null {
-  const normalized = content.replace(/\r\n/g, "\n");
+function findKnownGeneratedTelegramTransportBlock(
+  content: string,
+  transportHeadingStarts: ReadonlySet<number>,
+  startIndex = 0,
+): GeneratedTransportMatch | null {
   let best: GeneratedTransportMatch | null = null;
 
   for (const candidate of KNOWN_GENERATED_TELEGRAM_TRANSPORT_BLOCKS) {
     const block = trimForCompare(candidate.text);
     let offset = startIndex;
-    while (offset <= normalized.length - block.length) {
-      const start = normalized.indexOf(block, offset);
+    while (offset <= content.length - block.length) {
+      const start = content.indexOf(block, offset);
       if (start < 0) {
         break;
       }
       const end = start + block.length;
-      if (isBlockBoundary(normalized, start, end)) {
+      if (transportHeadingStarts.has(start) && isBlockBoundary(content, start, end)) {
         if (!best || start < best.start || (start === best.start && end > best.end)) {
           best = { start, end, state: candidate.state };
         }
@@ -248,31 +310,65 @@ interface MarkdownHeading {
   text: string;
 }
 
-function markdownHeadingsOutsideFences(content: string): MarkdownHeading[] {
+interface MarkdownStructure {
+  headings: MarkdownHeading[];
+  unterminatedFenceStart: number | null;
+}
+
+function analyzeMarkdownStructure(content: string): MarkdownStructure {
   const headings: MarkdownHeading[] = [];
-  let fence: { marker: string; length: number } | null = null;
+  let fence: { marker: string; length: number; start: number } | null = null;
+  const setextState: { candidate: { start: number; text: string } | null } = { candidate: null };
   let lineStart = 0;
 
   while (lineStart <= content.length) {
     const lineEnd = content.indexOf("\n", lineStart);
     const end = lineEnd < 0 ? content.length : lineEnd;
     const line = content.slice(lineStart, end);
-    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (fenceMatch) {
-      const marker = fenceMatch[1][0] ?? "";
-      if (!fence) {
-        fence = { marker, length: fenceMatch[1].length };
-      } else if (fence.marker === marker && fenceMatch[1].length >= fence.length) {
+    if (fence) {
+      const closingFence = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const marker = closingFence?.[1]?.[0] ?? "";
+      if (closingFence && fence.marker === marker && closingFence[1].length >= fence.length) {
         fence = null;
       }
-    } else if (!fence) {
-      const headingMatch = /^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$/.exec(line);
-      if (headingMatch) {
-        headings.push({
-          start: lineStart,
-          level: headingMatch[1].length,
-          text: headingMatch[2].trim().replace(/[ \t]+#+[ \t]*$/, ""),
-        });
+      setextState.candidate = null;
+    } else {
+      const openingFence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      const marker = openingFence?.[1]?.[0] ?? "";
+      const info = openingFence?.[2] ?? "";
+      // CommonMark forbids backticks in the info string of a backtick fence.
+      // Without this check, inline code such as ```send.file``` hides later
+      // headings and makes a forced migration delete unrelated persona text.
+      const isValidOpeningFence = Boolean(openingFence) && (marker !== "`" || !info.includes("`"));
+      if (openingFence && isValidOpeningFence) {
+        fence = { marker, length: openingFence[1].length, start: lineStart };
+        setextState.candidate = null;
+      } else {
+        const setextMatch = /^ {0,3}(=+|-+)[ \t]*$/.exec(line);
+        if (setextMatch && setextState.candidate) {
+          headings.push({
+            start: setextState.candidate.start,
+            level: setextMatch[1][0] === "=" ? 1 : 2,
+            text: setextState.candidate.text.trim(),
+          });
+        }
+        const headingMatch = /^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$/.exec(line);
+        if (headingMatch) {
+          headings.push({
+            start: lineStart,
+            level: headingMatch[1].length,
+            text: headingMatch[2].trim().replace(/[ \t]+#+[ \t]*$/, ""),
+          });
+        }
+        if (setextMatch || headingMatch || !/\S/.test(line)) {
+          setextState.candidate = null;
+        } else if (setextState.candidate) {
+          setextState.candidate.text += `\n${line}`;
+        } else {
+          setextState.candidate = /^ {0,3}\S/.test(line)
+            ? { start: lineStart, text: line }
+            : null;
+        }
       }
     }
 
@@ -281,36 +377,49 @@ function markdownHeadingsOutsideFences(content: string): MarkdownHeading[] {
     }
     lineStart = lineEnd + 1;
   }
-  return headings;
+  return { headings, unterminatedFenceStart: fence?.start ?? null };
 }
 
-function findTelegramTransportSection(content: string): { start: number; end: number; text: string } | null {
-  const normalized = content.replace(/\r\n/g, "\n");
-  const headings = markdownHeadingsOutsideFences(normalized);
-  const headingIndex = headings.findIndex((heading) => heading.level === 2 && heading.text.startsWith("Telegram Transport"));
-  if (headingIndex < 0) {
-    return null;
+function markdownHeadingsOutsideFences(content: string): MarkdownHeading[] {
+  return analyzeMarkdownStructure(content).headings;
+}
+
+interface MarkdownSection {
+  start: number;
+  end: number;
+}
+
+function findTelegramTransportSections(content: string, headings: readonly MarkdownHeading[]): MarkdownSection[] {
+  const sections: MarkdownSection[] = [];
+  for (let index = 0; index < headings.length; index++) {
+    const heading = headings[index];
+    if (heading.level !== 2 || !heading.text.startsWith("Telegram Transport")) {
+      continue;
+    }
+    sections.push({
+      start: heading.start,
+      // Force removal stops at every later heading, including a subsection, so
+      // user-owned persona remains intact even when Markdown nesting is loose.
+      end: headings[index + 1]?.start ?? content.length,
+    });
   }
-  const start = headings[headingIndex].start;
-  // Force removal is intentionally conservative: stop at any later Markdown
-  // heading, even a subsection, rather than risk deleting user-owned persona.
-  const end = headings[headingIndex + 1]?.start ?? normalized.length;
-  return { start, end, text: normalized.slice(start, end) };
+  return sections;
 }
 
 export function inspectInstanceAgentInstructionsContent(
   content: string,
   agentPath = "",
 ): InstanceAgentInstructionsInspection {
-  const trimmed = trimForCompare(content);
+  const normalized = normalizeAgentContent(content).text;
+  const trimmed = normalized.trim();
   if (!trimmed) {
     return { state: "empty", path: agentPath, detail: "agent.md is empty" };
   }
-  const analysis = analyzeGeneratedTelegramTransportBlocks(content);
+  const analysis = analyzeGeneratedTelegramTransportBlocks(normalized);
   if (analysis.customOrModified) {
     return { state: "custom-transport", path: agentPath, detail: "Telegram Transport section is custom or modified" };
   }
-  if (analysis.matches.length > 0) {
+  if (analysis.matches.length > 0 || analysis.scheduledMatches.length > 0) {
     const state = analysis.state;
     return {
       state,
@@ -321,19 +430,11 @@ export function inspectInstanceAgentInstructionsContent(
     };
   }
 
-  const section = findTelegramTransportSection(content);
-  if (!section) {
+  const headings = markdownHeadingsOutsideFences(normalized);
+  if (findTelegramTransportSections(normalized, headings).length === 0) {
     return { state: "persona-only", path: agentPath, detail: "agent.md contains only user-owned instructions" };
   }
   return { state: "custom-transport", path: agentPath, detail: "Telegram Transport section is custom or unknown" };
-}
-
-function stripGeneratedScheduledTasksResidue(content: string): string {
-  let remaining = content.trimStart();
-  while (remaining.startsWith(NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE)) {
-    remaining = remaining.slice(NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE.length).trimStart();
-  }
-  return remaining;
 }
 
 function firstNonWhitespaceIndex(content: string, start: number): number {
@@ -341,7 +442,15 @@ function firstNonWhitespaceIndex(content: string, start: number): number {
   return offset < 0 ? content.length : start + offset;
 }
 
-function matchingKnownBlockEndAt(content: string, start: number, blocks: readonly string[]): number | null {
+function matchingKnownBlockEndAt(
+  content: string,
+  start: number,
+  blocks: readonly string[],
+  headingStarts: ReadonlySet<number>,
+): number | null {
+  if (!headingStarts.has(start)) {
+    return null;
+  }
   for (const candidate of blocks) {
     const block = trimForCompare(candidate);
     const end = start + block.length;
@@ -352,7 +461,11 @@ function matchingKnownBlockEndAt(content: string, start: number, blocks: readonl
   return null;
 }
 
-function extendGeneratedRemovalEnd(content: string, initialEnd: number): number {
+function extendGeneratedRemovalEnd(
+  content: string,
+  initialEnd: number,
+  headingStarts: ReadonlySet<number>,
+): number {
   let end = initialEnd;
   while (end < content.length) {
     const next = firstNonWhitespaceIndex(content, end);
@@ -360,15 +473,15 @@ function extendGeneratedRemovalEnd(content: string, initialEnd: number): number 
       return end;
     }
 
-    const scheduledEnd = matchingKnownBlockEndAt(content, next, GENERATED_SCHEDULED_TASKS_BLOCKS);
+    const scheduledEnd = matchingKnownBlockEndAt(content, next, GENERATED_SCHEDULED_TASKS_BLOCKS, headingStarts);
     if (scheduledEnd !== null) {
       end = scheduledEnd;
       continue;
     }
 
-    const residueEnd = next + NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE.length;
+    const residueEnd = next + FROZEN_NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE.length;
     if (
-      content.startsWith(NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE, next)
+      content.startsWith(FROZEN_NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE, next)
       && isBlockBoundary(content, next, residueEnd)
     ) {
       end = residueEnd;
@@ -381,108 +494,160 @@ function extendGeneratedRemovalEnd(content: string, initialEnd: number): number 
 
 interface GeneratedTransportAnalysis {
   matches: Array<GeneratedTransportMatch & { removalEnd: number }>;
+  scheduledMatches: Array<{ start: number; end: number; removalEnd: number }>;
   state: "generated-current" | "legacy-generated";
   customOrModified: boolean;
 }
 
-function isSafeGeneratedRemovalBoundary(content: string, end: number): boolean {
+function generatedRemovalBoundary(
+  content: string,
+  end: number,
+  headings: readonly MarkdownHeading[],
+): { safe: boolean; removalEnd: number } {
   const next = firstNonWhitespaceIndex(content, end);
   if (next >= content.length) {
-    return true;
+    return { safe: true, removalEnd: content.length };
   }
-  return markdownHeadingsOutsideFences(content.slice(next))[0]?.start === 0;
+  const heading = headings.find((entry) => firstNonWhitespaceIndex(content, entry.start) === next);
+  return heading
+    ? { safe: true, removalEnd: heading.start }
+    : { safe: false, removalEnd: next };
 }
 
 function analyzeGeneratedTelegramTransportBlocks(content: string): GeneratedTransportAnalysis {
-  const normalized = content.replace(/\r\n/g, "\n");
+  const headings = markdownHeadingsOutsideFences(content);
+  const headingStarts = new Set(headings.map((heading) => heading.start));
+  const transportHeadingStarts = new Set(headings
+    .filter((heading) => heading.level === 2 && heading.text.startsWith("Telegram Transport"))
+    .map((heading) => heading.start));
   const matches: GeneratedTransportAnalysis["matches"] = [];
+  const scheduledMatches: GeneratedTransportAnalysis["scheduledMatches"] = [];
   let cursor = 0;
   let state: GeneratedTransportAnalysis["state"] = "generated-current";
+  let hasModifiedSuffix = false;
 
-  while (cursor < normalized.length) {
-    const match = findKnownGeneratedTelegramTransportBlock(normalized, cursor);
+  while (cursor < content.length) {
+    const match = findKnownGeneratedTelegramTransportBlock(content, transportHeadingStarts, cursor);
     if (!match) {
       break;
     }
-    const removalEnd = extendGeneratedRemovalEnd(normalized, match.end);
-    matches.push({ ...match, removalEnd });
-    if (match.state === "legacy-generated" || removalEnd > match.end) {
+    const extendedEnd = extendGeneratedRemovalEnd(content, match.end, headingStarts);
+    const boundary = generatedRemovalBoundary(content, extendedEnd, headings);
+    matches.push({ ...match, removalEnd: boundary.safe ? boundary.removalEnd : extendedEnd });
+    hasModifiedSuffix ||= !boundary.safe;
+    if (match.state === "legacy-generated" || extendedEnd > match.end) {
       state = "legacy-generated";
     }
-    cursor = Math.max(removalEnd, match.end);
+    cursor = Math.max(boundary.safe ? boundary.removalEnd : extendedEnd, match.end);
+  }
+
+  for (const heading of headings) {
+    if (heading.level !== 2 || heading.text !== "Scheduled Tasks") {
+      continue;
+    }
+    const end = matchingKnownBlockEndAt(content, heading.start, GENERATED_SCHEDULED_TASKS_BLOCKS, headingStarts);
+    if (end === null) {
+      continue;
+    }
+    const extendedEnd = extendGeneratedRemovalEnd(content, end, headingStarts);
+    const boundary = generatedRemovalBoundary(content, extendedEnd, headings);
+    scheduledMatches.push({
+      start: heading.start,
+      end,
+      removalEnd: boundary.safe ? boundary.removalEnd : extendedEnd,
+    });
+    state = "legacy-generated";
   }
 
   const knownStarts = new Set(matches.map((match) => match.start));
-  const hasUnknownHeading = markdownHeadingsOutsideFences(normalized).some((heading) =>
+  const hasUnknownHeading = headings.some((heading) =>
     heading.level === 2
     && heading.text.startsWith("Telegram Transport")
     && !knownStarts.has(heading.start)
   );
-  const hasModifiedSuffix = matches.some((match) => !isSafeGeneratedRemovalBoundary(normalized, match.removalEnd));
   return {
     matches,
+    scheduledMatches,
     state,
     customOrModified: hasUnknownHeading || hasModifiedSuffix,
   };
 }
 
-function removeContentRange(content: string, start: number, end: number): string {
-  const before = content.slice(0, start).trimEnd();
-  const after = content.slice(end).trimStart();
-  const stripped = `${before}${before && after ? "\n\n" : ""}${after}`.trim();
-  return stripped ? `${stripped}\n` : "";
-}
-
 function removeContentRanges(
-  content: string,
+  originalContent: string,
+  normalized: NormalizedAgentContent,
   ranges: ReadonlyArray<{ start: number; end: number }>,
 ): string {
+  const mapped = ranges
+    .map((range) => ({
+      start: normalized.originalOffsets[range.start],
+      end: normalized.originalOffsets[range.end],
+    }))
+    .sort((left, right) => left.start - right.start);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const range of mapped) {
+    const previous = merged.at(-1);
+    if (previous && range.start <= previous.end) {
+      previous.end = Math.max(previous.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+
   const retained: string[] = [];
   let cursor = 0;
-  for (const range of ranges) {
-    retained.push(content.slice(cursor, range.start));
+  for (const range of merged) {
+    retained.push(originalContent.slice(cursor, range.start));
     cursor = range.end;
   }
-  retained.push(content.slice(cursor));
-  const normalized = retained.map((part) => part.trim()).filter(Boolean).join("\n\n");
-  return normalized ? `${normalized}\n` : "";
+  retained.push(originalContent.slice(cursor));
+  const result = retained.join("");
+  return normalizeAgentContent(result).text.trim() ? result : "";
 }
 
-function stripTelegramTransportSection(content: string): { content: string; removed: boolean } {
-  const normalized = content.replace(/\r\n/g, "\n");
-  const section = findTelegramTransportSection(normalized);
-  if (!section) {
+function stripTelegramTransportSections(content: string): { content: string; removed: boolean } {
+  const normalized = normalizeAgentContent(content);
+  const structure = analyzeMarkdownStructure(normalized.text);
+  const headings = structure.headings;
+  const sections = findTelegramTransportSections(normalized.text, headings);
+  if (sections.length === 0) {
+    return { content, removed: false };
+  }
+  if (
+    structure.unterminatedFenceStart !== null
+    && sections.some((section) =>
+      structure.unterminatedFenceStart! >= section.start
+      && structure.unterminatedFenceStart! < section.end
+    )
+  ) {
     return { content, removed: false };
   }
 
-  let after = normalized.slice(section.end).trimStart();
-  let strippedGeneratedScheduledTasks = false;
-  for (const block of GENERATED_SCHEDULED_TASKS_BLOCKS) {
-    const normalizedBlock = block.replace(/\r\n/g, "\n");
-    if (after.startsWith(normalizedBlock)) {
-      after = after.slice(normalizedBlock.length).trimStart();
-      strippedGeneratedScheduledTasks = true;
-      break;
-    }
-  }
-  if (strippedGeneratedScheduledTasks) {
-    after = stripGeneratedScheduledTasksResidue(after);
-  }
-  const adjustedEnd = normalized.length - after.length;
-  return { content: removeContentRange(normalized, section.start, adjustedEnd), removed: true };
+  const headingStarts = new Set(headings.map((heading) => heading.start));
+  const ranges = sections.map((section) => {
+    const extendedEnd = extendGeneratedRemovalEnd(normalized.text, section.end, headingStarts);
+    const boundary = generatedRemovalBoundary(normalized.text, extendedEnd, headings);
+    return { start: section.start, end: boundary.safe ? boundary.removalEnd : extendedEnd };
+  });
+  return { content: removeContentRanges(content, normalized, ranges), removed: true };
 }
 
 export function stripGeneratedTelegramTransportSection(content: string): { content: string; removed: boolean } {
-  const normalized = content.replace(/\r\n/g, "\n");
-  const analysis = analyzeGeneratedTelegramTransportBlocks(normalized);
-  if (analysis.customOrModified || analysis.matches.length === 0) {
+  const normalized = normalizeAgentContent(content);
+  const analysis = analyzeGeneratedTelegramTransportBlocks(normalized.text);
+  if (
+    analysis.customOrModified
+    || (analysis.matches.length === 0 && analysis.scheduledMatches.length === 0)
+  ) {
     return { content, removed: false };
   }
 
   return {
     content: removeContentRanges(
+      content,
       normalized,
-      analysis.matches.map((match) => ({ start: match.start, end: match.removalEnd })),
+      [...analysis.matches, ...analysis.scheduledMatches]
+        .map((match) => ({ start: match.start, end: match.removalEnd })),
     ),
     removed: true,
   };
@@ -562,12 +727,12 @@ export async function migrateInstanceAgentInstructions(
     return { status: "current", path: agentPath, changed: false };
   }
   if (inspection.state === "generated-current" || inspection.state === "legacy-generated") {
-    if (options.dryRun) {
-      return { status: "migrated", path: agentPath, changed: false, dryRun: true };
-    }
     const stripped = stripGeneratedTelegramTransportSection(content);
     if (!stripped.removed) {
       return { status: "manual-review", path: agentPath, changed: false };
+    }
+    if (options.dryRun) {
+      return { status: "migrated", path: agentPath, changed: false, dryRun: true };
     }
     await writeFile(agentPath, stripped.content, { encoding: "utf8", mode: 0o600 });
     return { status: "migrated", path: agentPath, changed: true };
@@ -576,11 +741,14 @@ export async function migrateInstanceAgentInstructions(
     return { status: "manual-review", path: agentPath, changed: false };
   }
 
+  const stripped = stripTelegramTransportSections(content);
+  if (!stripped.removed) {
+    return { status: "manual-review", path: agentPath, changed: false };
+  }
   if (options.dryRun) {
     return { status: "force-migrated", path: agentPath, changed: false, dryRun: true };
   }
   const backupPath = await writeAgentBackup(agentPath, content, options.now ?? (() => new Date()));
-  const stripped = stripTelegramTransportSection(content);
   await writeFile(agentPath, stripped.content, { encoding: "utf8", mode: 0o600 });
   return { status: "force-migrated", path: agentPath, changed: true, backupPath };
 }

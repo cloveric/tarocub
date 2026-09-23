@@ -19,7 +19,10 @@ import { createArchive } from "../src/state/archive.js";
 import { CronStore } from "../src/state/cron-store.js";
 import { LarkGroupModeStore } from "../src/lark/group-mode-store.js";
 import { resolveLarkServiceLockPath } from "../src/lark/service.js";
-import { stripGeneratedTelegramTransportSection } from "../src/commands/access.js";
+import {
+  inspectInstanceAgentInstructionsContent,
+  stripGeneratedTelegramTransportSection,
+} from "../src/commands/access.js";
 import {
   GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS,
   telegramAgentInstructions,
@@ -63,6 +66,17 @@ describe("runCli", () => {
     expect(instructions).toContain("cron.toggle");
     expect(instructions).toContain("web_extract");
     expect(instructions).toContain("web_search");
+  });
+
+  it("keeps the v0.1.354 agent.md migration snapshot byte-for-byte frozen", () => {
+    expect(GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS).toBe([
+      "## Telegram Transport",
+      "",
+      "Plain text; ask in chat. Never use `AskUserQuestion`. Deliver: file/image [tool:{\"name\":\"send.file\",\"payload\":{\"path\":\"/absolute/path\"}}] (`send.image` same), batch fenced `tool-call` {name:\"send.batch\",payload:{message?,images?,files?}}, small text fenced `file:name.ext`.",
+      "Reminders only on explicit schedule/remind requests: emit [tool:{\"name\":\"cron.add\",\"payload\":{\"in\":\"10m\",\"prompt\":\"check email\"}}] with one of `in`/`at`/`cron`, optional `description`, no `chatId`/`userId`; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; `at` ISO timezone. Let bridge confirm; native schedulers only if explicitly asked.",
+      "URLs/current facts: exact URLs use `web_extract`/browser first; otherwise use `web_search`; disclose fallback.",
+      "",
+    ].join("\n"));
   });
 
   it("configures the default instance", async () => {
@@ -5208,12 +5222,151 @@ describe("runCli", () => {
     }
   });
 
+  it("accepts an indented persona heading as a safe generated-block boundary", () => {
+    const original = `${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}  # Persona\nKeep me.\n`;
+
+    expect(inspectInstanceAgentInstructionsContent(original).state).toBe("generated-current");
+    expect(stripGeneratedTelegramTransportSection(original)).toEqual({
+      content: "  # Persona\nKeep me.\n",
+      removed: true,
+    });
+  });
+
   it("removes every repeated exact generated Telegram transport block in one pass", () => {
     const stripped = stripGeneratedTelegramTransportSection(
       `${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}\n${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}# Persona\nKeep me.\n`,
     );
 
     expect(stripped).toEqual({ content: "# Persona\nKeep me.\n", removed: true });
+  });
+
+  it("does not migrate an exact generated block quoted inside a Markdown fence", () => {
+    const original = [
+      "# Notes",
+      "Quoted example:",
+      "```md",
+      GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS.trimEnd(),
+      "# Example persona",
+      "```",
+      "",
+    ].join("\n");
+
+    expect(stripGeneratedTelegramTransportSection(original)).toEqual({
+      content: original,
+      removed: false,
+    });
+    expect(inspectInstanceAgentInstructionsContent(original).state).toBe("persona-only");
+  });
+
+  it("recognizes a generated block after a UTF-8 BOM", () => {
+    const original = `\uFEFF${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}`;
+
+    expect(inspectInstanceAgentInstructionsContent(original).state).toBe("generated-current");
+    expect(stripGeneratedTelegramTransportSection(original)).toEqual({ content: "", removed: true });
+  });
+
+  it("preserves a BOM, full CRLF content, and Markdown hard-break whitespace", () => {
+    const generatedCrLf = GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS.replaceAll("\n", "\r\n");
+    const original = `\uFEFF# Persona\r\nKeep this hard break  \r\n${generatedCrLf}# Next\r\nKeep.\r\n`;
+
+    expect(stripGeneratedTelegramTransportSection(original)).toEqual({
+      content: "\uFEFF# Persona\r\nKeep this hard break  \r\n# Next\r\nKeep.\r\n",
+      removed: true,
+    });
+  });
+
+  it("recognizes the compact and short-guardrail templates shipped before v0.1.29", () => {
+    const historical = [
+      [
+        "## Telegram Transport",
+        "",
+        "Plain text; ask in chat. Deliver: file/image [tool:{\"name\":\"send.file\",\"payload\":{\"path\":\"/absolute/path\"}}] (`send.image` same), batch fenced `tool-call` {name:\"send.batch\",payload:{message?,images?,files?}}, small text fenced `file:name.ext`.",
+        "Reminders only on explicit schedule/remind requests: emit [tool:{\"name\":\"cron.add\",\"payload\":{\"in\":\"10m\",\"prompt\":\"check email\"}}] with one of `in`/`at`/`cron`, optional `description`, no `chatId`/`userId`; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; `at` ISO timezone. Let bridge confirm; native schedulers only if explicitly asked.",
+        "URLs/current facts: exact URLs use `web_extract`/browser first; otherwise use `web_search`; disclose fallback.",
+        "",
+      ].join("\n"),
+      [
+        "## Telegram Transport",
+        "",
+        "Plain text; ask in chat. Tags when needed: file/image [tool:{\"name\":\"send.file\",\"payload\":{\"path\":\"/absolute/path\"}}] (`send.image` same); batch fenced `tool-call` JSON {name:\"send.batch\",payload:{message?,images?,files?}}. Reminder [tool:{\"name\":\"cron.add\",\"payload\":{\"in\":\"10m\",\"prompt\":\"check email\"}}] with one of `in`/`at`/`cron`, optional `description`, no `chatId`/`userId`; manage with `[tool:{\"name\":\"cron.list\",\"payload\":{}}]`, `[tool:{\"name\":\"cron.remove\",\"payload\":{\"query\":\"task text\"}}]`, `[tool:{\"name\":\"cron.remove\",\"payload\":{\"id\":\"<job-id>\"}}]`, or `[tool:{\"name\":\"cron.toggle\",\"payload\":{\"query\":\"task text\"}}]`; use query only when it uniquely identifies the task, list first if ambiguous, never invent IDs. Only emit reminder tool tags when the user explicitly asks to schedule/remind; do not infer reminders from ordinary dates/times in analysis. `at` must be an ISO date-time with timezone, such as 2026-05-27T13:30:00+08:00. Plain reminders notify directly; set deliveryMode:\"agent\" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.",
+        "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
+        "",
+      ].join("\n"),
+    ];
+
+    for (const original of historical) {
+      expect(inspectInstanceAgentInstructionsContent(original).state).toBe("legacy-generated");
+      expect(stripGeneratedTelegramTransportSection(original)).toEqual({ content: "", removed: true });
+    }
+  });
+
+  it("removes pre-guardrail generated Scheduled Tasks residue", () => {
+    const scheduledTasks = [
+      "## Scheduled Tasks",
+      "",
+      "For Telegram reminders emit [tool:{\"name\":\"cron.add\",\"payload\":{\"in\":\"10m\",\"prompt\":\"check email\"}}]; payload needs `prompt` plus exactly one of `in`/`at`/`cron`, optional `description`, never `chatId`/`userId`. Let the bridge confirm. Use native/session-local schedulers only if explicitly asked.",
+      "",
+    ].join("\n");
+    const original = `${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}${scheduledTasks}`;
+
+    expect(stripGeneratedTelegramTransportSection(original)).toEqual({ content: "", removed: true });
+  });
+
+  it("removes standalone Scheduled Tasks residue left by v0.1.355", () => {
+    const historicalBlocks = [
+      [
+        "## Scheduled Tasks",
+        "",
+        "For Telegram reminders emit [tool:{\"name\":\"cron.add\",\"payload\":{\"in\":\"10m\",\"prompt\":\"check email\"}}]; payload needs `prompt` plus exactly one of `in`/`at`/`cron`, optional `description`, never `chatId`/`userId`. Let the bridge confirm. Use native/session-local schedulers only if explicitly asked.",
+      ].join("\n"),
+      [
+        "## Scheduled Tasks",
+        "",
+        "For reminders or recurring tasks, emit one inline tool tag, such as [tool:{\"name\":\"cron.add\",\"payload\":{\"in\":\"10m\",\"prompt\":\"check email\"}}], [tool:{\"name\":\"cron.add\",\"payload\":{\"at\":\"2026-05-01T09:00:00Z\",\"prompt\":\"Monday standup\"}}], or [tool:{\"name\":\"cron.add\",\"payload\":{\"cron\":\"0 9 * * 1\",\"prompt\":\"weekly summary\"}}]. Use exactly one of `in`, `at`, or `cron`; optional `description` is shown in `/cron list`; never include `chatId` or `userId`. The bridge confirms success or failure; do not claim scheduling succeeded in your own words. Use native/session-local schedulers only if the user explicitly asks for non-Telegram scheduling.",
+      ].join("\n"),
+      [
+        "## Scheduled Tasks",
+        "",
+        "For reminders or recurring tasks, emit one inline tool tag, such as [tool:{\"name\":\"cron.add\",\"payload\":{\"in\":\"10m\",\"prompt\":\"check email\"}}], [tool:{\"name\":\"cron.add\",\"payload\":{\"at\":\"2026-05-01T09:00:00Z\",\"prompt\":\"Monday standup\"}}], or [tool:{\"name\":\"cron.add\",\"payload\":{\"cron\":\"0 9 * * 1\",\"prompt\":\"weekly summary\"}}]. Use exactly one of `in`, `at`, or `cron`; optional `description` is shown in `/cron list`; never include `chatId` or `userId`. The bridge confirms success or failure; do not claim scheduling succeeded in your own words.",
+      ].join("\n"),
+    ];
+
+    for (const block of historicalBlocks) {
+      const original = `${block}\n\n# Persona\nKeep me.\n`;
+      expect(inspectInstanceAgentInstructionsContent(original).state).toBe("legacy-generated");
+      expect(stripGeneratedTelegramTransportSection(original)).toEqual({
+        content: "# Persona\nKeep me.\n",
+        removed: true,
+      });
+    }
+
+    const withUnheadedNote = `# Persona\nKeep me.\n\n${historicalBlocks[0]}\n\nMy own note.\n`;
+    expect(inspectInstanceAgentInstructionsContent(withUnheadedNote).state).toBe("legacy-generated");
+    const stripped = stripGeneratedTelegramTransportSection(withUnheadedNote);
+    expect(stripped.removed).toBe(true);
+    expect(stripped.content).toContain("# Persona\nKeep me.");
+    expect(stripped.content).toContain("My own note.");
+    expect(stripped.content).not.toContain("## Scheduled Tasks");
+  });
+
+  it("removes the historical fenced tool-call transport and scheduler pair", () => {
+    const original = [
+      "## Telegram Transport",
+      "",
+      "Plain text only; ask in chat, not blocking prompt tools. For one existing file/image, emit one inline tool tag such as [tool:{\"name\":\"send.file\",\"payload\":{\"path\":\"/absolute/path\"}}] or [tool:{\"name\":\"send.image\",\"payload\":{\"path\":\"/absolute/image.png\"}}]. For batch delivery or long messages, emit a fenced tool-call block like:",
+      "```tool-call",
+      "{\"name\":\"send.batch\",\"payload\":{\"message\":\"Done\",\"images\":[\"/absolute/image.png\"],\"files\":[\"/absolute/report.pdf\"]}}",
+      "```",
+      "Small text/code may use one fenced `file:name.ext` block. Never claim delivery succeeded in your own words; let the bridge receipt confirm it.",
+      "",
+      "## Scheduled Tasks",
+      "",
+      "For reminders or recurring tasks, emit one inline tool tag, such as [tool:{\"name\":\"cron.add\",\"payload\":{\"in\":\"10m\",\"prompt\":\"check email\"}}], [tool:{\"name\":\"cron.add\",\"payload\":{\"at\":\"2026-05-01T09:00:00Z\",\"prompt\":\"Monday standup\"}}], or [tool:{\"name\":\"cron.add\",\"payload\":{\"cron\":\"0 9 * * 1\",\"prompt\":\"weekly summary\"}}]. Use exactly one of `in`, `at`, or `cron`; optional `description` is shown in `/cron list`; never include `chatId` or `userId`. The bridge confirms success or failure; do not claim scheduling succeeded in your own words. Use native/session-local schedulers only if the user explicitly asks for non-Telegram scheduling.",
+      "",
+    ].join("\n");
+
+    expect(inspectInstanceAgentInstructionsContent(original).state).toBe("legacy-generated");
+    expect(stripGeneratedTelegramTransportSection(original)).toEqual({ content: "", removed: true });
   });
 
   it("shows, sets, and resolves the instructions path for an instance", async () => {
@@ -5516,6 +5669,174 @@ describe("runCli", () => {
     }
   });
 
+  it("does not treat a fenced info-string line as a closing fence during force migration", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, [
+        "## Telegram Transport",
+        "",
+        "Use my relay. Example:",
+        "",
+        "```",
+        "```tool-call",
+        "{...}",
+        "```",
+        "",
+        "## Persona",
+        "Keep me.",
+        "",
+      ].join("\n"), "utf8");
+
+      await runCli(["telegram", "instructions", "migrate", "--instance", "alpha", "--force"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: () => undefined },
+      });
+
+      await expect(readFile(agentPath, "utf8")).resolves.toBe("## Persona\nKeep me.\n");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("does not treat inline backticks as a fence during force migration", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, [
+        "## Telegram Transport",
+        "",
+        "Use my relay; ```send.file``` tags go to it.",
+        "",
+        "# Persona",
+        "Keep me.",
+        "",
+      ].join("\n"), "utf8");
+
+      await runCli(["telegram", "instructions", "migrate", "--instance", "alpha", "--force"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: () => undefined },
+      });
+
+      await expect(readFile(agentPath, "utf8")).resolves.toBe("# Persona\nKeep me.\n");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("preserves every line of a following Setext persona heading during force migration", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(
+        agentPath,
+        "## Telegram Transport\n\nUse my relay.\n\nKitty the Cat\n    Persona Title\n=============\nKeep me.\n",
+        "utf8",
+      );
+
+      await runCli(["telegram", "instructions", "migrate", "--instance", "alpha", "--force"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: () => undefined },
+      });
+
+      await expect(readFile(agentPath, "utf8")).resolves.toBe(
+        "Kitty the Cat\n    Persona Title\n=============\nKeep me.\n",
+      );
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("refuses force migration when a transport section has an unterminated fence", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+    const original = "## Telegram Transport\n\nUse my relay.\n\n```text\n# Persona\nKeep me.\n";
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, original, "utf8");
+
+      await runCli(["telegram", "instructions", "migrate", "--instance", "alpha", "--force"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(messages[0]).toContain("manual review required");
+      await expect(readFile(agentPath, "utf8")).resolves.toBe(original);
+      expect(await readdir(path.dirname(agentPath))).not.toEqual(
+        expect.arrayContaining([expect.stringMatching(/^agent\.md\.bak\./)]),
+      );
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("force-migrates every custom Telegram Transport section in one pass", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, [
+        "## Telegram Transport",
+        "",
+        "Use relay one.",
+        "",
+        "# Persona",
+        "Keep me.",
+        "",
+        "## Telegram Transport",
+        "",
+        "Use relay two.",
+        "",
+        "# Tail",
+        "Keep this too.",
+        "",
+      ].join("\n"), "utf8");
+
+      await runCli(["telegram", "instructions", "migrate", "--instance", "alpha", "--force"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: () => undefined },
+      });
+
+      await expect(readFile(agentPath, "utf8")).resolves.toBe(
+        "# Persona\nKeep me.\n\n# Tail\nKeep this too.\n",
+      );
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("leaves a fenced transport example unchanged when --force has nothing removable", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+    const original = `# Notes\n\`\`\`md\n${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}\`\`\`\n`;
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, original, "utf8");
+
+      await runCli(["telegram", "instructions", "migrate", "--instance", "alpha", "--force"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(messages[0]).toContain("already persona-only");
+      await expect(readFile(agentPath, "utf8")).resolves.toBe(original);
+      expect((await readdir(path.dirname(agentPath))).some((name) => name.startsWith("agent.md.bak."))).toBe(false);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
   it("dry-runs an instructions migration without writing files", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];
@@ -5534,6 +5855,33 @@ describe("runCli", () => {
       expect(handled).toBe(true);
       expect(messages[0]).toContain('Would migrate generated Telegram transport instructions out of agent.md for instance "alpha"');
       await expect(readFile(agentPath, "utf8")).resolves.toBe(legacy);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("is idempotent after a generated instructions migration", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, `${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}# Persona\nKeep me.\n`, "utf8");
+
+      await runCli(["telegram", "instructions", "migrate", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+      const once = await readFile(agentPath, "utf8");
+      await runCli(["telegram", "instructions", "migrate", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      await expect(readFile(agentPath, "utf8")).resolves.toBe(once);
+      expect(messages.at(-1)).toContain("already persona-only");
+      expect((await readdir(path.dirname(agentPath))).some((name) => name.startsWith("agent.md.bak."))).toBe(false);
     } finally {
       await removeTempRoot(tempDir);
     }

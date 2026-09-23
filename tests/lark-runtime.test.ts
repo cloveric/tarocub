@@ -30,7 +30,11 @@ describe("runLarkService", () => {
     };
 
     try {
-      await writeFile(path.join(stateDir, "agent.md"), GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS, "utf8");
+      await writeFile(
+        path.join(stateDir, "agent.md"),
+        `${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}# Persona\nKeep this text.\n`,
+        "utf8",
+      );
 
       await runLarkService({
         HOME: os.homedir(),
@@ -49,7 +53,9 @@ describe("runLarkService", () => {
         logger,
       });
 
-      await expect(readFile(path.join(stateDir, "agent.md"), "utf8")).resolves.toBe("");
+      await expect(readFile(path.join(stateDir, "agent.md"), "utf8")).resolves.toBe(
+        "# Persona\nKeep this text.\n",
+      );
       expect(JSON.stringify(logger.log.mock.calls)).toContain("Removed generated Telegram Transport instructions");
     } finally {
       await rm(stateDir, { recursive: true, force: true });

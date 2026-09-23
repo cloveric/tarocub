@@ -18,6 +18,6 @@ telegram instructions migrate --all --dry-run
 telegram instructions migrate --all
 ```
 
-The migration matches frozen snapshots of known generated or legacy `## Telegram Transport` blocks and removes only those exact bytes plus immediately adjacent known generated scheduler residue. Plain text and headings before or after the generated block are preserved. A custom or modified transport section is reported for manual review, recorded as a startup-maintenance warning, and left unchanged by default. An explicit `--force` removes a custom transport section after creating an adjacent `agent.md.bak.<timestamp>` backup.
+The migration matches frozen snapshots of known generated or legacy `## Telegram Transport` blocks and known standalone `## Scheduled Tasks` residue, then removes only those safe ranges. Matching ignores quoted examples inside Markdown fences, accepts UTF-8 BOM and CRLF input, and preserves the original line endings and whitespace of retained persona text. A custom or modified transport section is reported for manual review, recorded as a startup-maintenance warning, and left unchanged by default. An explicit `--force` removes all custom transport sections after creating an adjacent `agent.md.bak.<timestamp>` backup; it recognizes ATX and Setext headings, refuses sections with unterminated fences, and leaves the file untouched when no section can be removed safely.
 
 The old `telegram instructions upgrade` spelling remains as a compatibility alias, but new operator guidance should use `migrate`.

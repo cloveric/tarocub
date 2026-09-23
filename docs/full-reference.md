@@ -590,7 +590,7 @@ telegram instructions migrate --all --dry-run
 telegram instructions migrate --all
 ```
 
-This removes exact frozen snapshots of known generated transport blocks while preserving surrounding persona text at every Markdown heading level. Custom or modified transport sections are left untouched and logged for manual review unless you rerun with `--force`; forced migration creates an `agent.md.bak.<timestamp>` backup first.
+This removes exact frozen snapshots of known generated transport blocks and standalone generated scheduler residue while preserving surrounding persona text, original line endings, and whitespace at every Markdown heading level. Quoted templates inside Markdown fences are ignored, and UTF-8 BOM/CRLF files are supported. Custom or modified transport sections are left untouched and logged for manual review unless you rerun with `--force`; forced migration recognizes ATX and Setext headings, refuses unterminated fences, removes all safely bounded matching sections, and creates an `agent.md.bak.<timestamp>` backup first.
 
 ---
 
