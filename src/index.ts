@@ -228,6 +228,13 @@ async function main(): Promise<void> {
           outcome: "success",
           detail: `agent.md transport migration ${result.status}`,
         });
+      } else if (result.status === "manual-review") {
+        logLifecycleEvent({
+          type: "service.startup_maintenance",
+          instanceName,
+          outcome: "error",
+          detail: `agent.md contains a custom or unknown Telegram Transport section; review it and run "telegram instructions migrate --instance ${instanceName} --force" only if it should be removed`,
+        });
       }
     } catch (error) {
       logLifecycleEvent({

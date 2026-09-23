@@ -4,7 +4,6 @@ import path from "node:path";
 import { joinStatePath, resolveInstanceStateDir } from "../config.js";
 import { normalizeInstanceName } from "../instance.js";
 import { appendAuditEvent } from "../state/audit-log.js";
-import { defaultTelegramToolRegistry } from "../tools/telegram-tool-registry.js";
 import { GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS } from "../telegram/agent-instructions.js";
 
 export interface InstanceTokenEnv {
@@ -21,35 +20,19 @@ export interface PersistedInstanceToken {
   envPath: string;
 }
 
-function registeredToolName(name: string): string {
-  return defaultTelegramToolRegistry.get(name)?.name ?? name;
-}
-
-function toolTag(name: string, payload: Record<string, unknown>): string {
-  return `[tool:${JSON.stringify({ name: registeredToolName(name), payload })}]`;
-}
-
-function toolExample(name: string, index = 0): string {
-  const tool = defaultTelegramToolRegistry.get(name);
-  const payload = tool?.examples?.[index];
-  if (!payload) {
-    throw new Error(`missing generated agent example for tool: ${name}`);
-  }
-  return toolTag(name, payload);
-}
-
-function toolCallBlockExample(name: string, index = 0): string {
-  const tool = defaultTelegramToolRegistry.get(name);
-  const payload = tool?.examples?.[index];
-  if (!payload) {
-    throw new Error(`missing generated agent example for tool: ${name}`);
-  }
-  return [
-    "```tool-call",
-    JSON.stringify({ name: registeredToolName(name), payload }),
-    "```",
-  ].join("\n");
-}
+// Migration evidence is append-only. Do not update these snapshots when the
+// live prompt or tool registry changes; add a new historical snapshot instead.
+const FROZEN_SEND_FILE_TOOL_TAG = '[tool:{"name":"send.file","payload":{"path":"/absolute/path"}}]';
+const FROZEN_SEND_IMAGE_TOOL_TAG = '[tool:{"name":"send.image","payload":{"path":"/absolute/image.png"}}]';
+const FROZEN_SEND_BATCH_TOOL_TAG = '[tool:{"name":"send.batch","payload":{"message":"Done","images":["/absolute/image.png"],"files":["/absolute/report.pdf"]}}]';
+const FROZEN_CRON_ADD_IN_TOOL_TAG = '[tool:{"name":"cron.add","payload":{"in":"10m","prompt":"check email"}}]';
+const FROZEN_CRON_ADD_AT_TOOL_TAG = '[tool:{"name":"cron.add","payload":{"at":"2026-05-01T09:00:00Z","prompt":"Monday standup"}}]';
+const FROZEN_CRON_ADD_CRON_TOOL_TAG = '[tool:{"name":"cron.add","payload":{"cron":"0 9 * * 1","prompt":"weekly summary"}}]';
+const FROZEN_SEND_BATCH_TOOL_CALL_BLOCK = [
+  "```tool-call",
+  '{"name":"send.batch","payload":{"message":"Done","images":["/absolute/image.png"],"files":["/absolute/report.pdf"]}}',
+  "```",
+].join("\n");
 
 const REMINDER_TOOL_GUARDRAIL_SENTENCE =
   "Only emit reminder tool tags when the user explicitly asks to schedule/remind; do not infer reminders from ordinary dates/times in analysis. `at` must be an ISO date-time with timezone, such as 2026-05-27T13:30:00+08:00. For anything recurring (every N minutes/hours, or repeating over a window) emit exactly ONE `cron` tag with a single STANDARD 5-field expression (`minute hour day-of-month month day-of-week` — NO seconds field, NO year field; croner rejects 6-7 field exprs so they silently never fire), e.g. every 15 minutes through the afternoon = `*/15 13-14 * * *` — never many one-shot `at`/`in` tags or one tag per interval; a single cron job still fires (and notifies) separately each time.";
@@ -63,17 +46,17 @@ const GENERATED_SCHEDULED_TASKS_BLOCKS = [
   [
     "## Scheduled Tasks",
     "",
-    `For Telegram reminders emit ${toolExample("cron.add", 0)}; payload needs \`prompt\` plus exactly one of \`in\`/\`at\`/\`cron\`, optional \`description\`, never \`chatId\`/\`userId\`. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} Let the bridge confirm. Use native/session-local schedulers only if explicitly asked.`,
+    `For Telegram reminders emit ${FROZEN_CRON_ADD_IN_TOOL_TAG}; payload needs \`prompt\` plus exactly one of \`in\`/\`at\`/\`cron\`, optional \`description\`, never \`chatId\`/\`userId\`. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} Let the bridge confirm. Use native/session-local schedulers only if explicitly asked.`,
   ].join("\n"),
   [
     "## Scheduled Tasks",
     "",
-    `For reminders or recurring tasks, emit one inline tool tag, such as ${toolExample("cron.add", 0)}, ${toolExample("cron.add", 1)}, or ${toolExample("cron.add", 2)}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} The bridge confirms success or failure; do not claim scheduling succeeded in your own words. ${NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE}`,
+    `For reminders or recurring tasks, emit one inline tool tag, such as ${FROZEN_CRON_ADD_IN_TOOL_TAG}, ${FROZEN_CRON_ADD_AT_TOOL_TAG}, or ${FROZEN_CRON_ADD_CRON_TOOL_TAG}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} The bridge confirms success or failure; do not claim scheduling succeeded in your own words. ${NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE}`,
   ].join("\n"),
   [
     "## Scheduled Tasks",
     "",
-    `For reminders or recurring tasks, emit one inline tool tag, such as ${toolExample("cron.add", 0)}, ${toolExample("cron.add", 1)}, or ${toolExample("cron.add", 2)}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} The bridge confirms success or failure; do not claim scheduling succeeded in your own words.`,
+    `For reminders or recurring tasks, emit one inline tool tag, such as ${FROZEN_CRON_ADD_IN_TOOL_TAG}, ${FROZEN_CRON_ADD_AT_TOOL_TAG}, or ${FROZEN_CRON_ADD_CRON_TOOL_TAG}. Use exactly one of \`in\`, \`at\`, or \`cron\`; optional \`description\` is shown in \`/cron list\`; never include \`chatId\` or \`userId\`. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} The bridge confirms success or failure; do not claim scheduling succeeded in your own words.`,
   ].join("\n"),
   [
     "## Scheduled Tasks",
@@ -116,52 +99,52 @@ const LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS = [
   [
     "## Telegram Transport",
     "",
-    `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}. Reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage with \`[tool:{"name":"cron.list","payload":{}}]\`, \`[tool:{"name":"cron.remove","payload":{"query":"task text"}}]\`, \`[tool:{"name":"cron.remove","payload":{"id":"<job-id>"}}]\`, or \`[tool:{"name":"cron.toggle","payload":{"query":"task text"}}]\`; use query only when it uniquely identifies the task, list first if ambiguous, never invent IDs. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
+    `Plain text; ask in chat. Tags when needed: file/image ${FROZEN_SEND_FILE_TOOL_TAG} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}. Reminder ${FROZEN_CRON_ADD_IN_TOOL_TAG} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage with \`[tool:{"name":"cron.list","payload":{}}]\`, \`[tool:{"name":"cron.remove","payload":{"query":"task text"}}]\`, \`[tool:{"name":"cron.remove","payload":{"id":"<job-id>"}}]\`, or \`[tool:{"name":"cron.toggle","payload":{"query":"task text"}}]\`; use query only when it uniquely identifies the task, list first if ambiguous, never invent IDs. ${REMINDER_TOOL_GUARDRAIL_SENTENCE} Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
     "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
   ].join("\n"),
   [
     "## Telegram Transport",
     "",
-    `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}. Reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage with \`[tool:{"name":"cron.list","payload":{}}]\`, \`[tool:{"name":"cron.remove","payload":{"query":"task text"}}]\`, \`[tool:{"name":"cron.remove","payload":{"id":"<job-id>"}}]\`, or \`[tool:{"name":"cron.toggle","payload":{"query":"task text"}}]\`; use query only when it uniquely identifies the task, list first if ambiguous, never invent IDs. Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
+    `Plain text; ask in chat. Tags when needed: file/image ${FROZEN_SEND_FILE_TOOL_TAG} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}. Reminder ${FROZEN_CRON_ADD_IN_TOOL_TAG} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage with \`[tool:{"name":"cron.list","payload":{}}]\`, \`[tool:{"name":"cron.remove","payload":{"query":"task text"}}]\`, \`[tool:{"name":"cron.remove","payload":{"id":"<job-id>"}}]\`, or \`[tool:{"name":"cron.toggle","payload":{"query":"task text"}}]\`; use query only when it uniquely identifies the task, list first if ambiguous, never invent IDs. Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
     "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
   ].join("\n"),
   [
     "## Telegram Transport",
     "",
-    `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
+    `Plain text; ask in chat. Tags when needed: file/image ${FROZEN_SEND_FILE_TOOL_TAG} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${FROZEN_CRON_ADD_IN_TOOL_TAG} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Plain reminders notify directly; set deliveryMode:"agent" only for AI-run tasks. Let bridge confirm; native schedulers only if explicitly asked.`,
     "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
   ].join("\n"),
   [
     "## Telegram Transport",
     "",
-    `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Let bridge confirm; native schedulers only if explicitly asked.`,
+    `Plain text; ask in chat. Tags when needed: file/image ${FROZEN_SEND_FILE_TOOL_TAG} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${FROZEN_CRON_ADD_IN_TOOL_TAG} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Let bridge confirm; native schedulers only if explicitly asked.`,
     "Web/current facts: if URL(s) are provided, read them directly with `web_extract` or browser first; use `web_search` for discovery/current facts when no exact URL or direct read fails, and disclose fallback.",
   ].join("\n"),
   [
     "## Telegram Transport",
     "",
-    `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Let bridge confirm; native schedulers only if explicitly asked.`,
+    `Plain text; ask in chat. Tags when needed: file/image ${FROZEN_SEND_FILE_TOOL_TAG} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${FROZEN_CRON_ADD_IN_TOOL_TAG} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Let bridge confirm; native schedulers only if explicitly asked.`,
     "Web/current facts: prefer `web_search` MCP; use native search only if unavailable/fails, and disclose fallback.",
   ].join("\n"),
   [
     "## Telegram Transport",
     "",
-    `Plain text; ask in chat. Tags when needed: file/image ${toolExample("send.file")} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Let bridge confirm; native schedulers only if explicitly asked.`,
+    `Plain text; ask in chat. Tags when needed: file/image ${FROZEN_SEND_FILE_TOOL_TAG} (\`send.image\` same); batch fenced \`tool-call\` JSON {name:"send.batch",payload:{message?,images?,files?}}; reminder ${FROZEN_CRON_ADD_IN_TOOL_TAG} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`. Let bridge confirm; native schedulers only if explicitly asked.`,
   ].join("\n"),
   [
     "## Telegram Transport",
     "",
-    `Plain text only; ask in chat. For one file use ${toolExample("send.file")}; use \`send.image\` similarly. For batches/long replies use fenced \`tool-call\` JSON: {name:"send.batch",payload:{message?,images?,files?}}. Small text/code may use fenced \`file:name.ext\`. Let the bridge confirm delivery.`,
+    `Plain text only; ask in chat. For one file use ${FROZEN_SEND_FILE_TOOL_TAG}; use \`send.image\` similarly. For batches/long replies use fenced \`tool-call\` JSON: {name:"send.batch",payload:{message?,images?,files?}}. Small text/code may use fenced \`file:name.ext\`. Let the bridge confirm delivery.`,
   ].join("\n"),
   [
     "## Telegram Transport",
     "",
-    `Plain text only; ask in chat, not blocking prompt tools. For one existing file/image, emit one inline tool tag such as ${toolExample("send.file")} or ${toolExample("send.image")}. For batch delivery or long messages, emit a fenced tool-call block like:\n${toolCallBlockExample("send.batch")}\nSmall text/code may use one fenced \`file:name.ext\` block. Never claim delivery succeeded in your own words; let the bridge receipt confirm it.`,
+    `Plain text only; ask in chat, not blocking prompt tools. For one existing file/image, emit one inline tool tag such as ${FROZEN_SEND_FILE_TOOL_TAG} or ${FROZEN_SEND_IMAGE_TOOL_TAG}. For batch delivery or long messages, emit a fenced tool-call block like:\n${FROZEN_SEND_BATCH_TOOL_CALL_BLOCK}\nSmall text/code may use one fenced \`file:name.ext\` block. Never claim delivery succeeded in your own words; let the bridge receipt confirm it.`,
   ].join("\n"),
   [
     "## Telegram Transport",
     "",
-    `Plain text only; ask in chat, not blocking prompt tools. For existing file delivery, emit one inline tool tag such as ${toolExample("send.file")}, ${toolExample("send.image")}, or ${toolExample("send.batch")}. Small text/code may use one fenced \`file:name.ext\` block; never claim delivery by path only.`,
+    `Plain text only; ask in chat, not blocking prompt tools. For existing file delivery, emit one inline tool tag such as ${FROZEN_SEND_FILE_TOOL_TAG}, ${FROZEN_SEND_IMAGE_TOOL_TAG}, or ${FROZEN_SEND_BATCH_TOOL_TAG}. Small text/code may use one fenced \`file:name.ext\` block; never claim delivery by path only.`,
   ].join("\n"),
   [
     "## Telegram Transport",
@@ -211,16 +194,107 @@ function trimForCompare(value: string): string {
   return value.replace(/\r\n/g, "\n").trim();
 }
 
+interface GeneratedTransportMatch {
+  start: number;
+  end: number;
+  state: "generated-current" | "legacy-generated";
+}
+
+const KNOWN_GENERATED_TELEGRAM_TRANSPORT_BLOCKS: ReadonlyArray<{
+  text: string;
+  state: GeneratedTransportMatch["state"];
+}> = [
+  { text: GENERATED_INSTANCE_AGENT_INSTRUCTIONS, state: "generated-current" },
+  ...LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS.map((text) => ({
+    text,
+    state: "legacy-generated" as const,
+  })),
+];
+
+function isBlockBoundary(content: string, start: number, end: number): boolean {
+  return (start === 0 || content[start - 1] === "\n")
+    && (end === content.length || content[end] === "\n");
+}
+
+function findKnownGeneratedTelegramTransportBlock(content: string, startIndex = 0): GeneratedTransportMatch | null {
+  const normalized = content.replace(/\r\n/g, "\n");
+  let best: GeneratedTransportMatch | null = null;
+
+  for (const candidate of KNOWN_GENERATED_TELEGRAM_TRANSPORT_BLOCKS) {
+    const block = trimForCompare(candidate.text);
+    let offset = startIndex;
+    while (offset <= normalized.length - block.length) {
+      const start = normalized.indexOf(block, offset);
+      if (start < 0) {
+        break;
+      }
+      const end = start + block.length;
+      if (isBlockBoundary(normalized, start, end)) {
+        if (!best || start < best.start || (start === best.start && end > best.end)) {
+          best = { start, end, state: candidate.state };
+        }
+        break;
+      }
+      offset = start + 1;
+    }
+  }
+
+  return best;
+}
+
+interface MarkdownHeading {
+  start: number;
+  level: number;
+  text: string;
+}
+
+function markdownHeadingsOutsideFences(content: string): MarkdownHeading[] {
+  const headings: MarkdownHeading[] = [];
+  let fence: { marker: string; length: number } | null = null;
+  let lineStart = 0;
+
+  while (lineStart <= content.length) {
+    const lineEnd = content.indexOf("\n", lineStart);
+    const end = lineEnd < 0 ? content.length : lineEnd;
+    const line = content.slice(lineStart, end);
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fenceMatch) {
+      const marker = fenceMatch[1][0] ?? "";
+      if (!fence) {
+        fence = { marker, length: fenceMatch[1].length };
+      } else if (fence.marker === marker && fenceMatch[1].length >= fence.length) {
+        fence = null;
+      }
+    } else if (!fence) {
+      const headingMatch = /^ {0,3}(#{1,6})(?:[ \t]+|$)(.*)$/.exec(line);
+      if (headingMatch) {
+        headings.push({
+          start: lineStart,
+          level: headingMatch[1].length,
+          text: headingMatch[2].trim().replace(/[ \t]+#+[ \t]*$/, ""),
+        });
+      }
+    }
+
+    if (lineEnd < 0) {
+      break;
+    }
+    lineStart = lineEnd + 1;
+  }
+  return headings;
+}
+
 function findTelegramTransportSection(content: string): { start: number; end: number; text: string } | null {
   const normalized = content.replace(/\r\n/g, "\n");
-  const heading = /^## Telegram Transport[^\n]*\n?/m.exec(normalized);
-  if (!heading || heading.index === undefined) {
+  const headings = markdownHeadingsOutsideFences(normalized);
+  const headingIndex = headings.findIndex((heading) => heading.level === 2 && heading.text.startsWith("Telegram Transport"));
+  if (headingIndex < 0) {
     return null;
   }
-  const start = heading.index;
-  const afterHeading = start + heading[0].length;
-  const nextHeading = /^## (?!Telegram Transport\b)[^\n]*\n?/m.exec(normalized.slice(afterHeading));
-  const end = nextHeading?.index === undefined ? normalized.length : afterHeading + nextHeading.index;
+  const start = headings[headingIndex].start;
+  // Force removal is intentionally conservative: stop at any later Markdown
+  // heading, even a subsection, rather than risk deleting user-owned persona.
+  const end = headings[headingIndex + 1]?.start ?? normalized.length;
   return { start, end, text: normalized.slice(start, end) };
 }
 
@@ -232,28 +306,25 @@ export function inspectInstanceAgentInstructionsContent(
   if (!trimmed) {
     return { state: "empty", path: agentPath, detail: "agent.md is empty" };
   }
-  const defaultInstructions = trimForCompare(GENERATED_INSTANCE_AGENT_INSTRUCTIONS);
-  if (trimmed.startsWith(defaultInstructions)) {
-    const afterDefault = trimmed.slice(defaultInstructions.length);
-    if (stripGeneratedScheduledTasksResidue(afterDefault) !== afterDefault.trimStart()) {
-      return { state: "legacy-generated", path: agentPath, detail: "agent.md contains generated instruction residue" };
-    }
-    return { state: "generated-current", path: agentPath, detail: "agent.md contains runtime-owned Telegram transport instructions" };
+  const analysis = analyzeGeneratedTelegramTransportBlocks(content);
+  if (analysis.customOrModified) {
+    return { state: "custom-transport", path: agentPath, detail: "Telegram Transport section is custom or modified" };
   }
-  if (trimmed.includes(defaultInstructions)) {
-    return { state: "generated-current", path: agentPath, detail: "agent.md contains runtime-owned Telegram transport instructions" };
+  if (analysis.matches.length > 0) {
+    const state = analysis.state;
+    return {
+      state,
+      path: agentPath,
+      detail: state === "generated-current"
+        ? "agent.md contains runtime-owned Telegram transport instructions"
+        : "agent.md contains known generated Telegram instruction residue",
+    };
   }
 
   const section = findTelegramTransportSection(content);
   if (!section) {
     return { state: "persona-only", path: agentPath, detail: "agent.md contains only user-owned instructions" };
   }
-
-  const sectionText = trimForCompare(section.text);
-  if (LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS.some((block) => trimForCompare(block) === sectionText)) {
-    return { state: "legacy-generated", path: agentPath, detail: "Telegram Transport section uses an older generated template" };
-  }
-
   return { state: "custom-transport", path: agentPath, detail: "Telegram Transport section is custom or unknown" };
 }
 
@@ -265,17 +336,125 @@ function stripGeneratedScheduledTasksResidue(content: string): string {
   return remaining;
 }
 
-function stripTelegramTransportSection(content: string, generatedOnly: boolean): { content: string; removed: boolean } {
+function firstNonWhitespaceIndex(content: string, start: number): number {
+  const offset = content.slice(start).search(/\S/);
+  return offset < 0 ? content.length : start + offset;
+}
+
+function matchingKnownBlockEndAt(content: string, start: number, blocks: readonly string[]): number | null {
+  for (const candidate of blocks) {
+    const block = trimForCompare(candidate);
+    const end = start + block.length;
+    if (content.startsWith(block, start) && isBlockBoundary(content, start, end)) {
+      return end;
+    }
+  }
+  return null;
+}
+
+function extendGeneratedRemovalEnd(content: string, initialEnd: number): number {
+  let end = initialEnd;
+  while (end < content.length) {
+    const next = firstNonWhitespaceIndex(content, end);
+    if (next >= content.length) {
+      return end;
+    }
+
+    const scheduledEnd = matchingKnownBlockEndAt(content, next, GENERATED_SCHEDULED_TASKS_BLOCKS);
+    if (scheduledEnd !== null) {
+      end = scheduledEnd;
+      continue;
+    }
+
+    const residueEnd = next + NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE.length;
+    if (
+      content.startsWith(NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE, next)
+      && isBlockBoundary(content, next, residueEnd)
+    ) {
+      end = residueEnd;
+      continue;
+    }
+    return end;
+  }
+  return end;
+}
+
+interface GeneratedTransportAnalysis {
+  matches: Array<GeneratedTransportMatch & { removalEnd: number }>;
+  state: "generated-current" | "legacy-generated";
+  customOrModified: boolean;
+}
+
+function isSafeGeneratedRemovalBoundary(content: string, end: number): boolean {
+  const next = firstNonWhitespaceIndex(content, end);
+  if (next >= content.length) {
+    return true;
+  }
+  return markdownHeadingsOutsideFences(content.slice(next))[0]?.start === 0;
+}
+
+function analyzeGeneratedTelegramTransportBlocks(content: string): GeneratedTransportAnalysis {
+  const normalized = content.replace(/\r\n/g, "\n");
+  const matches: GeneratedTransportAnalysis["matches"] = [];
+  let cursor = 0;
+  let state: GeneratedTransportAnalysis["state"] = "generated-current";
+
+  while (cursor < normalized.length) {
+    const match = findKnownGeneratedTelegramTransportBlock(normalized, cursor);
+    if (!match) {
+      break;
+    }
+    const removalEnd = extendGeneratedRemovalEnd(normalized, match.end);
+    matches.push({ ...match, removalEnd });
+    if (match.state === "legacy-generated" || removalEnd > match.end) {
+      state = "legacy-generated";
+    }
+    cursor = Math.max(removalEnd, match.end);
+  }
+
+  const knownStarts = new Set(matches.map((match) => match.start));
+  const hasUnknownHeading = markdownHeadingsOutsideFences(normalized).some((heading) =>
+    heading.level === 2
+    && heading.text.startsWith("Telegram Transport")
+    && !knownStarts.has(heading.start)
+  );
+  const hasModifiedSuffix = matches.some((match) => !isSafeGeneratedRemovalBoundary(normalized, match.removalEnd));
+  return {
+    matches,
+    state,
+    customOrModified: hasUnknownHeading || hasModifiedSuffix,
+  };
+}
+
+function removeContentRange(content: string, start: number, end: number): string {
+  const before = content.slice(0, start).trimEnd();
+  const after = content.slice(end).trimStart();
+  const stripped = `${before}${before && after ? "\n\n" : ""}${after}`.trim();
+  return stripped ? `${stripped}\n` : "";
+}
+
+function removeContentRanges(
+  content: string,
+  ranges: ReadonlyArray<{ start: number; end: number }>,
+): string {
+  const retained: string[] = [];
+  let cursor = 0;
+  for (const range of ranges) {
+    retained.push(content.slice(cursor, range.start));
+    cursor = range.end;
+  }
+  retained.push(content.slice(cursor));
+  const normalized = retained.map((part) => part.trim()).filter(Boolean).join("\n\n");
+  return normalized ? `${normalized}\n` : "";
+}
+
+function stripTelegramTransportSection(content: string): { content: string; removed: boolean } {
   const normalized = content.replace(/\r\n/g, "\n");
   const section = findTelegramTransportSection(normalized);
   if (!section) {
     return { content, removed: false };
   }
-  if (generatedOnly && !isGeneratedTelegramTransportSection(section.text)) {
-    return { content, removed: false };
-  }
 
-  const before = normalized.slice(0, section.start).trimEnd();
   let after = normalized.slice(section.end).trimStart();
   let strippedGeneratedScheduledTasks = false;
   for (const block of GENERATED_SCHEDULED_TASKS_BLOCKS) {
@@ -289,18 +468,24 @@ function stripTelegramTransportSection(content: string, generatedOnly: boolean):
   if (strippedGeneratedScheduledTasks) {
     after = stripGeneratedScheduledTasksResidue(after);
   }
-  const stripped = `${before}${before && after ? "\n\n" : ""}${after}`.trim();
-  return { content: stripped ? `${stripped}\n` : "", removed: true };
-}
-
-function isGeneratedTelegramTransportSection(sectionText: string): boolean {
-  const normalized = trimForCompare(sectionText);
-  return normalized === trimForCompare(GENERATED_INSTANCE_AGENT_INSTRUCTIONS) ||
-    LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS.some((block) => trimForCompare(block) === normalized);
+  const adjustedEnd = normalized.length - after.length;
+  return { content: removeContentRange(normalized, section.start, adjustedEnd), removed: true };
 }
 
 export function stripGeneratedTelegramTransportSection(content: string): { content: string; removed: boolean } {
-  return stripTelegramTransportSection(content, true);
+  const normalized = content.replace(/\r\n/g, "\n");
+  const analysis = analyzeGeneratedTelegramTransportBlocks(normalized);
+  if (analysis.customOrModified || analysis.matches.length === 0) {
+    return { content, removed: false };
+  }
+
+  return {
+    content: removeContentRanges(
+      normalized,
+      analysis.matches.map((match) => ({ start: match.start, end: match.removalEnd })),
+    ),
+    removed: true,
+  };
 }
 
 function isErrorCode(error: unknown, code: string): boolean {
@@ -380,7 +565,10 @@ export async function migrateInstanceAgentInstructions(
     if (options.dryRun) {
       return { status: "migrated", path: agentPath, changed: false, dryRun: true };
     }
-    const stripped = stripTelegramTransportSection(content, false);
+    const stripped = stripGeneratedTelegramTransportSection(content);
+    if (!stripped.removed) {
+      return { status: "manual-review", path: agentPath, changed: false };
+    }
     await writeFile(agentPath, stripped.content, { encoding: "utf8", mode: 0o600 });
     return { status: "migrated", path: agentPath, changed: true };
   }
@@ -392,7 +580,7 @@ export async function migrateInstanceAgentInstructions(
     return { status: "force-migrated", path: agentPath, changed: false, dryRun: true };
   }
   const backupPath = await writeAgentBackup(agentPath, content, options.now ?? (() => new Date()));
-  const stripped = stripTelegramTransportSection(content, false);
+  const stripped = stripTelegramTransportSection(content);
   await writeFile(agentPath, stripped.content, { encoding: "utf8", mode: 0o600 });
   return { status: "force-migrated", path: agentPath, changed: true, backupPath };
 }

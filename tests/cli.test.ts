@@ -5188,6 +5188,34 @@ describe("runCli", () => {
     expect(stripped.content).not.toContain("## Telegram Transport");
   });
 
+  it("preserves user content and refuses to auto-migrate an unheaded transport suffix", () => {
+    const cases = [
+      { suffix: "Answer briefly in Chinese.", removed: false },
+      { suffix: "# Persona\nAnswer briefly in Chinese.", removed: true },
+      { suffix: "### Style\nAnswer briefly in Chinese.", removed: true },
+    ];
+
+    for (const entry of cases) {
+      const original = `${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}${entry.suffix}\n`;
+      const stripped = stripGeneratedTelegramTransportSection(
+        original,
+      );
+
+      expect(stripped).toEqual({
+        content: entry.removed ? `${entry.suffix}\n` : original,
+        removed: entry.removed,
+      });
+    }
+  });
+
+  it("removes every repeated exact generated Telegram transport block in one pass", () => {
+    const stripped = stripGeneratedTelegramTransportSection(
+      `${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}\n${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}# Persona\nKeep me.\n`,
+    );
+
+    expect(stripped).toEqual({ content: "# Persona\nKeep me.\n", removed: true });
+  });
+
   it("shows, sets, and resolves the instructions path for an instance", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
     const messages: string[] = [];
@@ -5229,6 +5257,9 @@ describe("runCli", () => {
       "",
       "Plain text only; ask in chat, not blocking prompt tools; deliver files with `cctb send --file PATH` / `cctb send --image PATH`, or one fenced `file:name.ext` block for small text/code; never claim delivery by path only.",
       "",
+      "# Persona",
+      "Keep this text.",
+      "",
     ].join("\n");
 
     try {
@@ -5242,7 +5273,54 @@ describe("runCli", () => {
 
       expect(handled).toBe(true);
       expect(messages[0]).toContain('Migrated generated Telegram transport instructions out of agent.md for instance "alpha"');
-      await expect(readFile(agentPath, "utf8")).resolves.toBe("");
+      await expect(readFile(agentPath, "utf8")).resolves.toBe("# Persona\nKeep this text.\n");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("migrates only the frozen generated block and does not back up preserved persona text", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+    const persona = "### Style\nAnswer briefly in Chinese.";
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, `${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}${persona}\n`, "utf8");
+
+      const handled = await runCli(["telegram", "instructions", "migrate", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(handled).toBe(true);
+      expect(messages[0]).toContain('Migrated generated Telegram transport instructions out of agent.md for instance "alpha"');
+      await expect(readFile(agentPath, "utf8")).resolves.toBe(`${persona}\n`);
+      expect((await readdir(path.dirname(agentPath))).some((name) => name.startsWith("agent.md.bak."))).toBe(false);
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("leaves a generated block with appended unheaded rules for manual review", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const messages: string[] = [];
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+    const original = `${GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS}Also use my private relay.\n`;
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, original, "utf8");
+
+      await runCli(["telegram", "instructions", "migrate", "--instance", "alpha"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: (message) => messages.push(message) },
+      });
+
+      expect(messages[0]).toContain("manual review required");
+      await expect(readFile(agentPath, "utf8")).resolves.toBe(original);
+      expect((await readdir(path.dirname(agentPath))).some((name) => name.startsWith("agent.md.bak."))).toBe(false);
     } finally {
       await removeTempRoot(tempDir);
     }
@@ -5413,6 +5491,26 @@ describe("runCli", () => {
       const backupName = (await readdir(path.dirname(agentPath))).find((name) => name.startsWith("agent.md.bak."));
       expect(backupName).toBeDefined();
       await expect(readFile(path.join(path.dirname(agentPath), backupName ?? ""), "utf8")).resolves.toContain("Use my private relay");
+    } finally {
+      await removeTempRoot(tempDir);
+    }
+  });
+
+  it("force-migrates a custom transport block without deleting a following subsection persona", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const agentPath = path.join(tempDir, ".cctb", "alpha", "agent.md");
+
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(agentPath, "## Telegram Transport\n\n```sh\n# this is code, not a heading\necho relay\n```\n\n### Style\nAnswer in Chinese.\n", "utf8");
+
+      await runCli(["telegram", "instructions", "migrate", "--instance", "alpha", "--force"], {
+        env: { USERPROFILE: tempDir },
+        logger: { log: () => undefined },
+      });
+
+      await expect(readFile(agentPath, "utf8")).resolves.toBe("### Style\nAnswer in Chinese.\n");
+      expect((await readdir(path.dirname(agentPath))).some((name) => name.startsWith("agent.md.bak."))).toBe(true);
     } finally {
       await removeTempRoot(tempDir);
     }

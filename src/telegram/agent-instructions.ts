@@ -18,10 +18,15 @@ export function telegramAgentInstructions(): string {
   ].join("\n");
 }
 
-/** Kept as migration evidence for generated agent.md blocks from older releases. */
+/**
+ * Frozen v0.1.354 agent.md template. Keep migration evidence independent from
+ * the live runtime prompt so future wording/tool-example changes remain safe.
+ */
 export const GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS = [
   "## Telegram Transport",
   "",
-  telegramAgentInstructions().split("\n").slice(1).join("\n"),
+  "Plain text; ask in chat. Never use `AskUserQuestion`. Deliver: file/image [tool:{\"name\":\"send.file\",\"payload\":{\"path\":\"/absolute/path\"}}] (`send.image` same), batch fenced `tool-call` {name:\"send.batch\",payload:{message?,images?,files?}}, small text fenced `file:name.ext`.",
+  "Reminders only on explicit schedule/remind requests: emit [tool:{\"name\":\"cron.add\",\"payload\":{\"in\":\"10m\",\"prompt\":\"check email\"}}] with one of `in`/`at`/`cron`, optional `description`, no `chatId`/`userId`; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; `at` ISO timezone. Let bridge confirm; native schedulers only if explicitly asked.",
+  "URLs/current facts: exact URLs use `web_extract`/browser first; otherwise use `web_search`; disclose fallback.",
   "",
 ].join("\n");
