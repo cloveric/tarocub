@@ -173,7 +173,10 @@ export interface CodexUserMessageInput {
   text: string;
   files: string[];
   locale?: "en" | "zh";
+  /** Stable channel/runtime contract. Changes may reconfigure persistent workers. */
   instructions?: string;
+  /** Private guidance for this request only. Must never participate in worker settings. */
+  turnInstructions?: string;
   onProgress?: (partialText: string) => void;
   onApprovalRequest?: (request: EngineApprovalRequest) => Promise<EngineApprovalDecision>;
   onEngineEvent?: (event: EngineStreamEvent) => void | Promise<void>;

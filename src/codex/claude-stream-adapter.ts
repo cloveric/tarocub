@@ -8,6 +8,7 @@ import { ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS } from "./engine-timeouts.js";
 // than a local SIGTERM-only copy, so a Claude CLI (and its MCP/sandbox children)
 // that ignores SIGTERM is still force-killed — matching the other adapters.
 import { killProcessTree } from "./process-tree.js";
+import { prependPrivateTurnInstructions } from "./turn-instructions.js";
 
 import type {
   CodexAdapter,
@@ -843,7 +844,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
 
   private buildPrompt(input: CodexUserMessageInput): string {
     const parts: string[] = [];
-    parts.push(input.text);
+    parts.push(prependPrivateTurnInstructions(input.text, input.turnInstructions));
     for (const file of input.files) {
       parts.push(`Attachment: ${file}`);
     }

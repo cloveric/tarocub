@@ -16,6 +16,7 @@ import type {
 } from "./adapter.js";
 import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } from "./generated-files.js";
 import { killProcessTree } from "./process-tree.js";
+import { prependPrivateTurnInstructions } from "./turn-instructions.js";
 import {
   findThreadWriterLockHolder,
   renderThreadWriterLockDiagnosis,
@@ -1027,7 +1028,7 @@ export class CodexAppServerAdapter implements CodexAdapter {
       parts.push(`[System Instructions]\n${instructions}\n[End Instructions]`);
     }
 
-    parts.push(input.text);
+    parts.push(prependPrivateTurnInstructions(input.text, input.turnInstructions));
     for (const file of input.files) {
       parts.push(`Attachment: ${file}`);
     }

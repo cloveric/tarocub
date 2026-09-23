@@ -19,6 +19,7 @@ import { createClaudeInstructionsFile } from "./claude-instructions-file.js";
 import { killProcessTree } from "./process-tree.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
+import { prependPrivateTurnInstructions } from "./turn-instructions.js";
 
 type SpawnOptions = {
   stdio: ["pipe", "pipe", "pipe"];
@@ -328,7 +329,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
 
     // Build prompt with files
     const parts: string[] = [];
-    parts.push(input.text);
+    parts.push(prependPrivateTurnInstructions(input.text, input.turnInstructions));
     for (const file of input.files) {
       parts.push(`Attachment: ${file}`);
     }

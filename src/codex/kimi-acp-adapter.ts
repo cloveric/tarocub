@@ -51,6 +51,7 @@ import {
   ENGINE_DEFAULT_TURN_TIMEOUT_MS,
 } from "./engine-timeouts.js";
 import { appendSavedArtifactDeliveryTags } from "./generated-files.js";
+import { prependPrivateTurnInstructions } from "./turn-instructions.js";
 import {
   isKimiHookRelayVersionSupported,
   KIMI_HOOK_RELAY_URL_ENV,
@@ -2029,16 +2030,20 @@ export class KimiAcpAdapter implements CodexAdapter {
   }
 
   private buildPrompt(input: CodexUserMessageInput, instructions: string | null): string {
-    const text = instructions && !isSlashCommand(input.text)
+    const slashCommand = isSlashCommand(input.text);
+    const turnText = slashCommand
+      ? input.text
+      : prependPrivateTurnInstructions(input.text, input.turnInstructions);
+    const text = instructions && !slashCommand
       ? [
           "[Bridge Instructions]",
           instructions,
           "[/Bridge Instructions]",
           "",
           "[User Message]",
-          input.text,
+          turnText,
         ].join("\n")
-      : input.text;
+      : turnText;
     const parts = [text];
     for (const file of input.files) {
       parts.push(`Attachment: ${file}`);

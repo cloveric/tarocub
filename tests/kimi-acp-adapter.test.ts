@@ -4822,6 +4822,58 @@ describe("KimiAcpAdapter", () => {
     }
   });
 
+  it("keeps one worker when only turn-scoped instructions change", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-turn-instructions-test-"));
+    const harness = createHarness();
+    const syncWorkspaceInstructionsFn = vi.fn(async (_workspacePath: string, instructions: string | null) => instructions ?? "");
+    const adapter = new KimiAcpAdapter("/opt/kimi", {
+      ...adapterOptions(harness),
+      engineHomePath: root,
+      syncWorkspaceInstructionsFn,
+    });
+    try {
+      const first = adapter.sendUserMessage("telegram-turn-note", {
+        text: "first request",
+        files: [],
+        instructions: "Stable Lark contract",
+        turnInstructions: "First-turn delivery check",
+      });
+      await waitFor(() => harness.children[0]?.server.prompts.length === 1);
+      expect(promptText(harness.children[0].server)).toContain("First-turn delivery check");
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "one" },
+      });
+      harness.children[0].server.respondPrompt();
+      await expect(first).resolves.toEqual({ text: "one", sessionId: "kimi-session-1" });
+
+      const second = adapter.sendUserMessage("kimi-session-1", {
+        text: "second request",
+        files: [],
+        instructions: "Stable Lark contract",
+        turnInstructions: "Second-turn delivery check",
+      });
+      await waitFor(() => harness.children[0].server.prompts.length === 2);
+      expect(harness.children).toHaveLength(1);
+      expect(harness.killedPids).toEqual([]);
+      expect(promptText(harness.children[0].server, 1)).toContain("Second-turn delivery check");
+      expect(promptText(harness.children[0].server, 1)).not.toContain("First-turn delivery check");
+      expect(syncWorkspaceInstructionsFn).toHaveBeenLastCalledWith(
+        "/tmp/kimi-workspace",
+        "Stable Lark contract",
+      );
+      harness.children[0].server.sendUpdate({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "two" },
+      }, "kimi-session-1");
+      harness.children[0].server.respondPrompt();
+      await expect(second).resolves.toEqual({ text: "two" });
+    } finally {
+      adapter.destroy();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("uses Kimi YOLO instead of fully unsafe auto when approval mode is absent", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kimi-acp-safe-default-test-"));
     const configPath = path.join(root, "config.json");
@@ -4972,6 +5024,7 @@ describe("KimiAcpAdapter", () => {
       const turn = adapter.sendUserMessage("telegram-61", {
         text: "/compact",
         files: [],
+        turnInstructions: "This must not prefix a native slash command.",
         workspaceOverride: path.join(root, "external-workspace"),
       });
       await waitFor(() => harness.children[0]?.server.prompts.length === 1);

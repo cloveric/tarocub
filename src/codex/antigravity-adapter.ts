@@ -13,6 +13,7 @@ import type {
   EngineStreamEvent,
 } from "./adapter.js";
 import { killProcessTree } from "./process-tree.js";
+import { renderPrivateTurnInstructions } from "./turn-instructions.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 
 type SpawnOptions = {
@@ -251,6 +252,7 @@ function isNativeGoalCommand(text: string): boolean {
 
 function buildAntigravityPrompt(input: {
   instructions: string | null;
+  turnInstructions?: string;
   text: string;
   files: string[];
 }): string {
@@ -258,6 +260,8 @@ function buildAntigravityPrompt(input: {
   const nativeGoal = isNativeGoalCommand(input.text);
   if (nativeGoal) parts.push(input.text.trimStart());
   if (input.instructions) parts.push(renderPrivateInstructions(input.instructions));
+  const turnInstructions = renderPrivateTurnInstructions(input.turnInstructions);
+  if (turnInstructions) parts.push(turnInstructions);
   if (!nativeGoal) parts.push(["<user_message>", input.text, "</user_message>"].join("\n"));
   if (input.files.length > 0) {
     parts.push(input.files.map((file) => `Attachment: ${file}`).join("\n"));
@@ -414,7 +418,12 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       this.instructionsPath ? await this.loadInstructions() : null,
       input.instructions ?? null,
     );
-    const prompt = buildAntigravityPrompt({ instructions, text: input.text, files: input.files });
+    const prompt = buildAntigravityPrompt({
+      instructions,
+      turnInstructions: input.turnInstructions,
+      text: input.text,
+      files: input.files,
+    });
     const runtimeConfig = await this.loadRuntimeConfig();
     let permissionFlags = permissionFlagsForApprovalMode(runtimeConfig.approvalMode);
     if (runtimeConfig.approvalMode === "normal" && input.onApprovalRequest) {

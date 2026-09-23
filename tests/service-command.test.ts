@@ -555,7 +555,7 @@ describe("telegram service commands", () => {
 
       expect(handled).toBe(true);
       expect(messages[0]).toContain("- fail instructions:");
-      expect(messages[0]).toContain("run \"telegram instructions upgrade --instance alpha\"");
+      expect(messages[0]).toContain("run \"telegram instructions migrate --instance alpha\"");
       expect(messages[0]).toContain("Healthy: no");
     } finally {
       await removeTempRoot(tempDir);

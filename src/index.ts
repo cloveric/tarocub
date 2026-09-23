@@ -26,7 +26,7 @@ import { pruneStaleTelegramRuntimeDirs } from "./runtime/telegram-out.js";
 import { loadInstanceConfig } from "./telegram/instance-config.js";
 import { buildCronExecutor, sendCronFailureNotification } from "./runtime/cron-executor.js";
 import { initializeCronRuntime, shutdownCronRuntime } from "./runtime/cron-runtime.js";
-import { upgradeInstanceAgentInstructions } from "./commands/access.js";
+import { migrateInstanceAgentInstructions } from "./commands/access.js";
 import { runSearchMcpServer } from "../deepseek-harness-plugin/src/search-mcp-server.js";
 import { applyLarkBridgeRuntimeEnv, applyLarkEnvPassthrough, loadLarkRuntimeEnv, resolveLarkStateDir } from "./lark/env-file.js";
 import { runLarkService } from "./lark/service.js";
@@ -208,13 +208,11 @@ async function main(): Promise<void> {
       });
     }
 
-    // Auto-upgrade agent.md to the current generated template if the user
-    // hasn't customized the Telegram Transport section. This keeps existing
-    // bots in sync with new dispatch rules (e.g. the tool-layer transport
-    // updates in v4.5.7) without requiring the operator to run `telegram instructions
-    // upgrade` manually. force:false leaves custom-transport content alone.
+    // Transport rules are injected by the bridge on every turn. Remove only
+    // TaroCub-generated legacy sections so agent.md remains user-owned persona
+    // and preference content. force:false leaves unknown custom sections alone.
     try {
-      const result = await upgradeInstanceAgentInstructions(
+      const result = await migrateInstanceAgentInstructions(
         {
           HOME: resolvedEnv.HOME,
           USERPROFILE: resolvedEnv.USERPROFILE,
@@ -228,7 +226,7 @@ async function main(): Promise<void> {
           type: "service.startup_maintenance",
           instanceName,
           outcome: "success",
-          detail: `agent.md ${result.status}`,
+          detail: `agent.md transport migration ${result.status}`,
         });
       }
     } catch (error) {
@@ -236,7 +234,7 @@ async function main(): Promise<void> {
         type: "service.startup_maintenance",
         instanceName,
         outcome: "error",
-        detail: `agent.md upgrade: ${renderLifecycleError(error)}`,
+        detail: `agent.md transport migration: ${renderLifecycleError(error)}`,
       });
     }
     await new RuntimeStateStore(path.join(serviceConfig.stateDir, "runtime-state.json")).resetActiveTurns();

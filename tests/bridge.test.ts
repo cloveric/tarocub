@@ -64,6 +64,44 @@ describe("Bridge", () => {
     expect(sessionManager.bindSession).not.toHaveBeenCalled();
   });
 
+  it("combines stable runtime instructions while preserving turn-scoped guidance separately", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn(),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockResolvedValue({ text: "done" }),
+      createSession: vi.fn(),
+    };
+    const runtimeInstructions = vi.fn(() => "Telegram runtime contract");
+    const bridge = new Bridge(accessStore, sessionManager, adapter, { runtimeInstructions });
+
+    await bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "hello",
+      files: [],
+      instructions: "Caller contract",
+      turnInstructions: "Verify this turn's delivery",
+    });
+
+    expect(runtimeInstructions).toHaveBeenCalledTimes(1);
+    expect(adapter.sendUserMessage).toHaveBeenCalledWith("telegram-84", expect.objectContaining({
+      instructions: "Telegram runtime contract\n\nCaller contract",
+      turnInstructions: "Verify this turn's delivery",
+    }));
+  });
+
   it("serializes concurrent turns for the same engine session across bridge instances", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({

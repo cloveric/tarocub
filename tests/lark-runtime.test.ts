@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { Domain } from "@larksuiteoapi/node-sdk";
 
 import { acquireInstanceLock } from "../src/state/instance-lock.js";
-import { DEFAULT_INSTANCE_AGENT_INSTRUCTIONS } from "../src/commands/access.js";
+import { GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS } from "../src/telegram/agent-instructions.js";
 import { createLarkServiceRuntime, createTimestampedSdkLogger, resolveLarkServiceLockDir, runLarkService } from "../src/lark/service.js";
 import { stableLarkNumericId } from "../src/lark/message-normalizer.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
@@ -30,7 +30,7 @@ describe("runLarkService", () => {
     };
 
     try {
-      await writeFile(path.join(stateDir, "agent.md"), DEFAULT_INSTANCE_AGENT_INSTRUCTIONS, "utf8");
+      await writeFile(path.join(stateDir, "agent.md"), GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS, "utf8");
 
       await runLarkService({
         HOME: os.homedir(),

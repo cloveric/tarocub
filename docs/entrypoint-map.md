@@ -68,6 +68,9 @@ The Telegram path is now intentionally layered.
   Attachment download and voice transcription.
 - `src/telegram/message-turn.ts`
   Ordinary workflow-aware turn execution.
+- `src/telegram/agent-instructions.ts`
+  Bridge-owned stable Telegram channel contract injected at runtime. Instance
+  `agent.md` remains user-owned persona/preferences only.
 - `src/telegram/turn-error.ts`
   Auth retry, stale-session retry, workflow cleanup, final error reply/audit.
 - `src/telegram/response-delivery.ts`
@@ -130,7 +133,9 @@ The Telegram path is now intentionally layered.
 ## Shared Runtime Helpers
 
 - `src/runtime/bridge.ts`
-  Shared engine turn orchestration, session resolution, approvals, and provider result handling.
+  Shared engine turn orchestration, stable runtime-instruction merging, session resolution, approvals, and provider result handling.
+- `src/codex/turn-instructions.ts`
+  Renders request-scoped private guidance into the current prompt without changing persistent worker settings or fingerprints.
 - `src/runtime/bridge-turn.ts`
   Shared usage recording and budget threshold logic.
 - `src/runtime/turn-lock.ts`

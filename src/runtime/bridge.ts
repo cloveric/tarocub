@@ -80,6 +80,7 @@ export interface BridgeAuthorizedMessageInput {
   requestOutputDir?: string;
   workspaceOverride?: string;
   instructions?: string;
+  turnInstructions?: string;
   sideChannelCommand?: string;
   extraEnv?: Record<string, string>;
   abortSignal?: AbortSignal;
@@ -165,6 +166,7 @@ export class Bridge {
     private readonly adapter: CodexAdapter,
     private readonly options: {
       loadGroupMode?: () => Promise<GroupModeConfig>;
+      runtimeInstructions?: () => string | undefined;
       turnPool?: TurnPoolLike;
       turnPoolMetadata?: {
         channel?: string;
@@ -419,7 +421,11 @@ export class Bridge {
             text,
             files: input.files,
             locale: input.locale,
-            instructions: input.instructions,
+            instructions: [this.options.runtimeInstructions?.(), input.instructions]
+              .map((value) => value?.trim())
+              .filter((value): value is string => Boolean(value))
+              .join("\n\n") || undefined,
+            turnInstructions: input.turnInstructions,
             onProgress: input.onProgress,
             onApprovalRequest: input.onApprovalRequest,
             onEngineEvent: handleEngineEvent,

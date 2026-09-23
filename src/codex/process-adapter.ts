@@ -16,6 +16,7 @@ import { CodexAppServerAdapter, extractCodexToolItem, type AppServerSpawnCodex }
 import { appendUniqueSendImageTag, extractGeneratedImagePath, sendImageTag } from "./generated-files.js";
 import { killProcessTree } from "./process-tree.js";
 import { mergeAllowedTurnExtraEnv } from "./turn-env.js";
+import { prependPrivateTurnInstructions } from "./turn-instructions.js";
 import { DEFAULT_APPROVAL_MODE, normalizeApprovalMode, type ApprovalMode } from "../state/approval-mode.js";
 import { readValidatedConfigFile } from "../telegram/instance-config.js";
 
@@ -588,7 +589,7 @@ export class ProcessCodexAdapter implements CodexAdapter {
       parts.push(instructions);
       parts.push("---");
     }
-    parts.push(input.text);
+    parts.push(prependPrivateTurnInstructions(input.text, input.turnInstructions));
     for (const file of input.files) {
       parts.push(`Attachment: ${file}`);
     }

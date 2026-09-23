@@ -143,6 +143,7 @@ export interface LarkBridgeLike {
     requestOutputDir?: string;
     workspaceOverride?: string;
     instructions?: string;
+    turnInstructions?: string;
     extraEnv?: Record<string, string>;
     sessionIdOverride?: string;
     abortSignal?: AbortSignal;

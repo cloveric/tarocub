@@ -305,7 +305,8 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
       expect(bridge.handleAuthorizedMessage.mock.calls[0]![0]).toEqual(expect.objectContaining({
         text: expect.stringContaining("好了吗"),
-        instructions: expect.stringContaining("verify platform delivery, not session memory"),
+        instructions: expect.not.stringContaining("verify platform delivery, not session memory"),
+        turnInstructions: expect.stringContaining("verify platform delivery, not session memory"),
       }));
       expect(bridge.handleAuthorizedMessage.mock.calls[1]![0]).toEqual(expect.objectContaining({
         text: expect.stringContaining("Delivery verification retry"),

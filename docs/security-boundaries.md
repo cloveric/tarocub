@@ -187,7 +187,7 @@ File delivery is the highest-risk boundary in the product because it turns model
 
 ### Current enforcement
 
-- Instance `agent.md` teaches the engine to use registered `[tool:{"name":"send.file",...}]` / `[tool:{"name":"send.image",...}]` delivery tags for binary delivery
+- Bridge-owned runtime instructions teach the engine to use registered `[tool:{"name":"send.file",...}]` / `[tool:{"name":"send.image",...}]` delivery tags for binary delivery; instance `agent.md` remains user-owned persona/preferences
 - [src/telegram/tool-tags.ts](../src/telegram/tool-tags.ts) parses generic tool tags, and [src/telegram/legacy-delivery-tool-tags.ts](../src/telegram/legacy-delivery-tool-tags.ts) normalizes legacy `[send-file:]` / `[send-image:]` tags into the same tool layer
 - [src/telegram/delivery.ts](../src/telegram/delivery.ts:539) extracts legacy `[send-file:]`, Markdown image, and Markdown local-link references
 - [src/telegram/delivery.ts](../src/telegram/delivery.ts:581) resolves `realpath()` before policy checks

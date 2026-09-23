@@ -72,6 +72,7 @@ import {
 } from "./delivery.js";
 import {
   isLarkDeliveryFollowupRequest,
+  larkDeliveryFollowupInstruction,
   larkDeliveryFollowupRepairPrompt,
   larkDeliveryPreflightRepairPrompt,
   preflightLarkResponseDeliveryDirectives,
@@ -2272,7 +2273,8 @@ async function runNormalizedLarkMessage(
           onTurnLockWait: handleTurnLockWait,
           turnPoolWaitNotifyAfterMs: 10_000,
           onTurnPoolWait: handleTurnPoolWait,
-          instructions: larkAgentInstructions(commandText),
+          instructions: larkAgentInstructions(),
+          turnInstructions: larkDeliveryFollowupInstruction(commandText),
           extraEnv: {
             CCTB_LARK_ACTIVE_TURN: "1",
             CCTB_LARK_ACTIVE_INSTANCE: input.instanceName ?? path.basename(input.stateDir),

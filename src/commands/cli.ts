@@ -13,9 +13,9 @@ import { AccessStore } from "../state/access-store.js";
 import { normalizeInstanceName } from "../instance.js";
 import {
   ensureDefaultInstanceAgentInstructions,
+  migrateInstanceAgentInstructions,
   resolveInstanceAccessStatePath,
   resolveInstanceAgentInstructionsPath,
-  upgradeInstanceAgentInstructions,
   type InstanceAgentInstructionsUpgradeResult,
   type InstanceTokenEnv,
   writeInstanceBotToken,
@@ -4223,7 +4223,7 @@ async function runInstructionsCommand(
   const showInstanceOption = options.showInstanceOption ?? true;
   const instanceUsage = showInstanceOption ? " [--instance <name>]" : "";
   const allowUpgrade = options.allowUpgrade ?? true;
-  const commandList = allowUpgrade ? "show|set|path|upgrade" : "show|set|path";
+  const commandList = allowUpgrade ? "show|set|path|migrate" : "show|set|path";
   const usage = `Usage: ${commandName} <${commandList}>${instanceUsage}${allowUpgrade ? " [--all] [--force] [--dry-run]" : ""} [file-path]`;
 
   if (argv.length < 2) {
@@ -4272,16 +4272,16 @@ async function runInstructionsCommand(
     return true;
   }
 
-  if (subcommand === "upgrade") {
+  if (subcommand === "migrate" || subcommand === "upgrade") {
     if (!allowUpgrade) {
-      throw new Error("Lark transport instructions are injected per turn; use `lark instructions set <file>` for custom bot personality instead of running Telegram transport upgrades.");
+      throw new Error("Lark transport instructions are already injected per turn; agent.md is only for custom bot personality.");
     }
     const force = extractBooleanFlag(argv.slice(2), "--force");
     const dryRun = extractBooleanFlag(force.args, "--dry-run");
     const all = extractBooleanFlag(dryRun.args, "--all");
     const { instanceName, args } = extractInstanceOption(all.args, defaultInstanceName);
     if (args.length !== 0) {
-      throw new Error(`Usage: ${commandName} upgrade${instanceUsage} [--all] [--force] [--dry-run]`);
+      throw new Error(`Usage: ${commandName} migrate${instanceUsage} [--all] [--force] [--dry-run]`);
     }
 
     let instanceNames = [instanceName];
@@ -4308,10 +4308,10 @@ async function runInstructionsCommand(
       }
     }
 
-    const summary = { upgraded: 0, current: 0, skippedCustom: 0, failed: 0 };
+    const summary = { migrated: 0, current: 0, skippedCustom: 0, failed: 0 };
     for (const name of instanceNames) {
       try {
-        const result = await upgradeInstanceAgentInstructions(env, name, {
+        const result = await migrateInstanceAgentInstructions(env, name, {
           force: force.enabled,
           dryRun: dryRun.enabled,
         });
@@ -4321,18 +4321,18 @@ async function runInstructionsCommand(
         } else if (result.status === "manual-review") {
           summary.skippedCustom++;
         } else {
-          summary.upgraded++;
+          summary.migrated++;
         }
       } catch (error) {
         if (!all.enabled) {
           throw error;
         }
         summary.failed++;
-        logger.log(`Failed to upgrade instructions for instance "${name}": ${formatCliError(error)}`);
+        logger.log(`Failed to migrate instructions for instance "${name}": ${formatCliError(error)}`);
       }
     }
     if (all.enabled) {
-      logger.log(`Summary: upgraded ${summary.upgraded}, current ${summary.current}, skipped custom ${summary.skippedCustom}, failed ${summary.failed}.`);
+      logger.log(`Summary: migrated ${summary.migrated}, current ${summary.current}, skipped custom ${summary.skippedCustom}, failed ${summary.failed}.`);
     }
     return true;
   }
@@ -4350,21 +4350,17 @@ function logInstructionsUpgradeResult(
   result: InstanceAgentInstructionsUpgradeResult,
 ): void {
   const would = result.dryRun ? "Would " : "";
-  if (result.status === "created") {
-    logger.log(`${would}${result.dryRun ? "create" : "Created"} instructions for instance "${instanceName}" at ${result.path}`);
-  } else if (result.status === "current") {
-    logger.log(`Instance "${instanceName}" instructions already current.`);
-  } else if (result.status === "upgraded") {
-    logger.log(`${would}${result.dryRun ? "upgrade" : "Upgraded"} instructions for instance "${instanceName}" at ${result.path}`);
-  } else if (result.status === "appended") {
-    logger.log(`${would}${result.dryRun ? "append" : "Appended"} Telegram transport instructions for instance "${instanceName}" at ${result.path}`);
-  } else if (result.status === "force-upgraded") {
-    logger.log(`${would}${result.dryRun ? "force-upgrade" : "Force-upgraded"} instructions for instance "${instanceName}" at ${result.path}`);
+  if (result.status === "current") {
+    logger.log(`Instance "${instanceName}" agent.md is already persona-only.`);
+  } else if (result.status === "migrated") {
+    logger.log(`${would}${result.dryRun ? "migrate" : "Migrated"} generated Telegram transport instructions out of agent.md for instance "${instanceName}" at ${result.path}`);
+  } else if (result.status === "force-migrated") {
+    logger.log(`${would}${result.dryRun ? "force-migrate" : "Force-migrated"} custom Telegram transport instructions out of agent.md for instance "${instanceName}" at ${result.path}`);
     if (result.backupPath) {
       logger.log(`Previous instructions backed up to ${result.backupPath}`);
     }
   } else {
-    logger.log(`Instance "${instanceName}" instructions: manual review required; run "telegram instructions upgrade --instance ${instanceName} --force" to replace the custom Telegram Transport block.`);
+    logger.log(`Instance "${instanceName}" instructions: manual review required; run "telegram instructions migrate --instance ${instanceName} --force" to remove the custom Telegram Transport block (a backup will be created).`);
   }
 }
 
@@ -4637,8 +4633,8 @@ Commands:
                                               View audit trail
   timeline [count] [--instance <name>] [--type <type>] [--chat <id>] [--outcome <outcome>] [--channel <telegram|bus|lark>]
                                               View timeline trail
-  instructions <show|set|path|upgrade> [--instance <name>] [--all] [--force] [--dry-run]
-                                              Manage per-instance agent.md
+  instructions <show|set|path|migrate> [--instance <name>] [--all] [--force] [--dry-run]
+                                              Manage persona-only agent.md and migrate legacy transport blocks
   yolo [on|off|unsafe] [--instance <name>]    Toggle YOLO auto-approval mode
   engine [codex|claude|kimi|deepseek|antigravity] [--instance <name>]
                                               Switch AI engine per instance
@@ -4669,7 +4665,7 @@ Commands:
   lark task <list|inspect|clear>              Inspect Feishu/Lark file workflow records
   lark backup [--out <path>]                  Back up Feishu/Lark state to a .cctb.gz archive
   lark restore <archive> [--force]            Restore Feishu/Lark state from a backup archive
-  lark instructions <show|set|path>           Manage Lark agent.md without Telegram transport upgrades
+  lark instructions <show|set|path>           Manage persona-only Lark agent.md
   lark engine|yolo|budget|locale|verbosity|usage
                                               Configure or inspect the Lark runtime instance
   lark audit [count] / lark timeline [count]

@@ -5,6 +5,7 @@ import { joinStatePath, resolveInstanceStateDir } from "../config.js";
 import { normalizeInstanceName } from "../instance.js";
 import { appendAuditEvent } from "../state/audit-log.js";
 import { defaultTelegramToolRegistry } from "../tools/telegram-tool-registry.js";
+import { GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS } from "../telegram/agent-instructions.js";
 
 export interface InstanceTokenEnv {
   HOME?: string;
@@ -53,18 +54,7 @@ function toolCallBlockExample(name: string, index = 0): string {
 const REMINDER_TOOL_GUARDRAIL_SENTENCE =
   "Only emit reminder tool tags when the user explicitly asks to schedule/remind; do not infer reminders from ordinary dates/times in analysis. `at` must be an ISO date-time with timezone, such as 2026-05-27T13:30:00+08:00. For anything recurring (every N minutes/hours, or repeating over a window) emit exactly ONE `cron` tag with a single STANDARD 5-field expression (`minute hour day-of-month month day-of-week` — NO seconds field, NO year field; croner rejects 6-7 field exprs so they silently never fire), e.g. every 15 minutes through the afternoon = `*/15 13-14 * * *` — never many one-shot `at`/`in` tags or one tag per interval; a single cron job still fires (and notifies) separately each time.";
 
-export function renderDefaultInstanceAgentInstructions(): string {
-  return [
-  "## Telegram Transport",
-  "",
-  `Plain text; ask in chat. Never use \`AskUserQuestion\`. Deliver: file/image ${toolExample("send.file")} (\`send.image\` same), batch fenced \`tool-call\` {name:"send.batch",payload:{message?,images?,files?}}, small text fenced \`file:name.ext\`.`,
-  `Reminders only on explicit schedule/remind requests: emit ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; \`at\` ISO timezone. Let bridge confirm; native schedulers only if explicitly asked.`,
-  "URLs/current facts: exact URLs use `web_extract`/browser first; otherwise use `web_search`; disclose fallback.",
-  "",
-  ].join("\n");
-}
-
-export const DEFAULT_INSTANCE_AGENT_INSTRUCTIONS = renderDefaultInstanceAgentInstructions();
+const GENERATED_INSTANCE_AGENT_INSTRUCTIONS = GENERATED_TELEGRAM_TRANSPORT_INSTRUCTIONS;
 
 const NATIVE_SESSION_LOCAL_SCHEDULER_SENTENCE =
   "Use native/session-local schedulers only if the user explicitly asks for non-Telegram scheduling.";
@@ -198,10 +188,10 @@ const LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS = [
 export type InstanceAgentInstructionsState =
   | "missing"
   | "empty"
-  | "current"
+  | "persona-only"
+  | "generated-current"
   | "legacy-generated"
-  | "custom-transport"
-  | "no-transport";
+  | "custom-transport";
 
 export interface InstanceAgentInstructionsInspection {
   state: InstanceAgentInstructionsState;
@@ -210,7 +200,7 @@ export interface InstanceAgentInstructionsInspection {
 }
 
 export interface InstanceAgentInstructionsUpgradeResult {
-  status: "created" | "current" | "upgraded" | "appended" | "manual-review" | "force-upgraded";
+  status: "current" | "migrated" | "manual-review" | "force-migrated";
   path: string;
   changed: boolean;
   dryRun?: boolean;
@@ -242,21 +232,21 @@ export function inspectInstanceAgentInstructionsContent(
   if (!trimmed) {
     return { state: "empty", path: agentPath, detail: "agent.md is empty" };
   }
-  const defaultInstructions = trimForCompare(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS);
+  const defaultInstructions = trimForCompare(GENERATED_INSTANCE_AGENT_INSTRUCTIONS);
   if (trimmed.startsWith(defaultInstructions)) {
     const afterDefault = trimmed.slice(defaultInstructions.length);
     if (stripGeneratedScheduledTasksResidue(afterDefault) !== afterDefault.trimStart()) {
       return { state: "legacy-generated", path: agentPath, detail: "agent.md contains generated instruction residue" };
     }
-    return { state: "current", path: agentPath, detail: "Telegram transport instructions are current" };
+    return { state: "generated-current", path: agentPath, detail: "agent.md contains runtime-owned Telegram transport instructions" };
   }
   if (trimmed.includes(defaultInstructions)) {
-    return { state: "current", path: agentPath, detail: "Telegram transport instructions are current" };
+    return { state: "generated-current", path: agentPath, detail: "agent.md contains runtime-owned Telegram transport instructions" };
   }
 
   const section = findTelegramTransportSection(content);
   if (!section) {
-    return { state: "no-transport", path: agentPath, detail: "agent.md has no Telegram Transport section" };
+    return { state: "persona-only", path: agentPath, detail: "agent.md contains only user-owned instructions" };
   }
 
   const sectionText = trimForCompare(section.text);
@@ -275,12 +265,14 @@ function stripGeneratedScheduledTasksResidue(content: string): string {
   return remaining;
 }
 
-function replaceTelegramTransportSection(content: string): string {
+function stripTelegramTransportSection(content: string, generatedOnly: boolean): { content: string; removed: boolean } {
   const normalized = content.replace(/\r\n/g, "\n");
   const section = findTelegramTransportSection(normalized);
   if (!section) {
-    const prefix = normalized.trimEnd();
-    return `${prefix}${prefix ? "\n\n" : ""}${DEFAULT_INSTANCE_AGENT_INSTRUCTIONS}`;
+    return { content, removed: false };
+  }
+  if (generatedOnly && !isGeneratedTelegramTransportSection(section.text)) {
+    return { content, removed: false };
   }
 
   const before = normalized.slice(0, section.start).trimEnd();
@@ -297,35 +289,18 @@ function replaceTelegramTransportSection(content: string): string {
   if (strippedGeneratedScheduledTasks) {
     after = stripGeneratedScheduledTasksResidue(after);
   }
-  return `${before}${before ? "\n\n" : ""}${DEFAULT_INSTANCE_AGENT_INSTRUCTIONS}${after ? `\n\n${after}` : ""}`;
+  const stripped = `${before}${before && after ? "\n\n" : ""}${after}`.trim();
+  return { content: stripped ? `${stripped}\n` : "", removed: true };
 }
 
 function isGeneratedTelegramTransportSection(sectionText: string): boolean {
   const normalized = trimForCompare(sectionText);
-  return normalized === trimForCompare(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS) ||
+  return normalized === trimForCompare(GENERATED_INSTANCE_AGENT_INSTRUCTIONS) ||
     LEGACY_GENERATED_TELEGRAM_TRANSPORT_BLOCKS.some((block) => trimForCompare(block) === normalized);
 }
 
 export function stripGeneratedTelegramTransportSection(content: string): { content: string; removed: boolean } {
-  const normalized = content.replace(/\r\n/g, "\n");
-  const section = findTelegramTransportSection(normalized);
-  if (!section || !isGeneratedTelegramTransportSection(section.text)) {
-    return { content, removed: false };
-  }
-
-  const before = normalized.slice(0, section.start).trimEnd();
-  let after = normalized.slice(section.end).trimStart();
-  for (const block of GENERATED_SCHEDULED_TASKS_BLOCKS) {
-    const normalizedBlock = block.replace(/\r\n/g, "\n");
-    if (after.startsWith(normalizedBlock)) {
-      after = after.slice(normalizedBlock.length).trimStart();
-      after = stripGeneratedScheduledTasksResidue(after);
-      break;
-    }
-  }
-
-  const stripped = `${before}${before && after ? "\n\n" : ""}${after}`.trim();
-  return { content: stripped ? `${stripped}\n` : "", removed: true };
+  return stripTelegramTransportSection(content, true);
 }
 
 function isErrorCode(error: unknown, code: string): boolean {
@@ -376,66 +351,54 @@ export async function inspectInstanceAgentInstructions(
   }
 }
 
-export async function upgradeInstanceAgentInstructions(
+export async function migrateInstanceAgentInstructions(
   env: Pick<InstanceTokenEnv, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR">,
   instanceName: string,
   options: { force?: boolean; dryRun?: boolean; now?: () => Date } = {},
 ): Promise<InstanceAgentInstructionsUpgradeResult> {
   const agentPath = resolveInstanceAgentInstructionsPath(env, instanceName);
-  if (!options.dryRun) {
-    await mkdir(path.dirname(agentPath), { recursive: true, mode: 0o700 });
-  }
 
   let content: string | undefined;
   try {
     content = await readFile(agentPath, "utf8");
   } catch (error) {
     if (isErrorCode(error, "ENOENT")) {
-      if (options.dryRun) {
-        return { status: "created", path: agentPath, changed: false, dryRun: true };
-      }
-      await writeFile(agentPath, DEFAULT_INSTANCE_AGENT_INSTRUCTIONS, { encoding: "utf8", mode: 0o600 });
-      return { status: "created", path: agentPath, changed: true };
+      return { status: "current", path: agentPath, changed: false };
     }
     throw error;
   }
 
   const inspection = inspectInstanceAgentInstructionsContent(content, agentPath);
-  if (inspection.state === "current") {
+  if (
+    inspection.state === "empty"
+    || inspection.state === "persona-only"
+    || inspection.state === "missing"
+  ) {
     return { status: "current", path: agentPath, changed: false };
   }
-  if (inspection.state === "empty") {
+  if (inspection.state === "generated-current" || inspection.state === "legacy-generated") {
     if (options.dryRun) {
-      return { status: "created", path: agentPath, changed: false, dryRun: true };
+      return { status: "migrated", path: agentPath, changed: false, dryRun: true };
     }
-    await writeFile(agentPath, DEFAULT_INSTANCE_AGENT_INSTRUCTIONS, { encoding: "utf8", mode: 0o600 });
-    return { status: "created", path: agentPath, changed: true };
-  }
-  if (inspection.state === "no-transport") {
-    if (options.dryRun) {
-      return { status: "appended", path: agentPath, changed: false, dryRun: true };
-    }
-    await writeFile(agentPath, replaceTelegramTransportSection(content), { encoding: "utf8", mode: 0o600 });
-    return { status: "appended", path: agentPath, changed: true };
-  }
-  if (inspection.state === "legacy-generated") {
-    if (options.dryRun) {
-      return { status: "upgraded", path: agentPath, changed: false, dryRun: true };
-    }
-    await writeFile(agentPath, replaceTelegramTransportSection(content), { encoding: "utf8", mode: 0o600 });
-    return { status: "upgraded", path: agentPath, changed: true };
+    const stripped = stripTelegramTransportSection(content, false);
+    await writeFile(agentPath, stripped.content, { encoding: "utf8", mode: 0o600 });
+    return { status: "migrated", path: agentPath, changed: true };
   }
   if (!options.force) {
     return { status: "manual-review", path: agentPath, changed: false };
   }
 
   if (options.dryRun) {
-    return { status: "force-upgraded", path: agentPath, changed: false, dryRun: true };
+    return { status: "force-migrated", path: agentPath, changed: false, dryRun: true };
   }
   const backupPath = await writeAgentBackup(agentPath, content, options.now ?? (() => new Date()));
-  await writeFile(agentPath, replaceTelegramTransportSection(content), { encoding: "utf8", mode: 0o600 });
-  return { status: "force-upgraded", path: agentPath, changed: true, backupPath };
+  const stripped = stripTelegramTransportSection(content, false);
+  await writeFile(agentPath, stripped.content, { encoding: "utf8", mode: 0o600 });
+  return { status: "force-migrated", path: agentPath, changed: true, backupPath };
 }
+
+/** Backward-compatible API name; `upgrade` now migrates transport rules to runtime injection. */
+export const upgradeInstanceAgentInstructions = migrateInstanceAgentInstructions;
 
 export function resolveInstanceAccessStatePath(
   env: Pick<InstanceTokenEnv, "HOME" | "USERPROFILE" | "CODEX_TELEGRAM_STATE_DIR">,
@@ -476,7 +439,7 @@ export async function ensureDefaultInstanceAgentInstructions(
   await mkdir(path.dirname(agentPath), { recursive: true, mode: 0o700 });
 
   try {
-    await writeFile(agentPath, DEFAULT_INSTANCE_AGENT_INSTRUCTIONS, {
+    await writeFile(agentPath, "", {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,

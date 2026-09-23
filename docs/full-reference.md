@@ -291,15 +291,15 @@ default and requires a Feishu capability the app may not have.**
 - **v4.6.10–v4.6.18** — hardens core Telegram operations: `/goal` routing for Codex/Claude, audio/video ASR intake, stale-process `/stop` cleanup, and optional Search MCP with `web_extract`, provider metadata, source logs, and health checks.
 - **v4.6.2** — adds `/board` durable Kanban state and `/mini` topic/thread workflows for lightweight multi-agent collaboration.
 
-**Upgrading existing generated instance instructions:** refresh generated `agent.md` blocks after updating so old bots get the latest compact Telegram Transport block:
+**Migrating existing instance instructions:** remove old generated Telegram Transport blocks now that the bridge injects channel rules at runtime:
 
 ```bash
-telegram instructions upgrade --all --dry-run
-telegram instructions upgrade --all
+telegram instructions migrate --all --dry-run
+telegram instructions migrate --all
 telegram service restart --all
 ```
 
-Use `--force` only for instances with a custom transport block you intentionally want to replace. Forced replacements create an `agent.md.bak.<timestamp>` backup next to the original file.
+Known generated blocks are removed while persona text is preserved. Custom transport blocks require manual review unless `--force` is used; forced migration first creates an `agent.md.bak.<timestamp>` backup.
 
 ---
 
@@ -310,9 +310,9 @@ Use `--force` only for instances with a custom transport block you intentionally
 - **Group topics become clean side conversations.** A single bot can serve private chat plus allowed Telegram groups; forum topics get separate sessions and cron scopes, so throwaway tasks and scheduled work do not pollute the main conversation. Topic peers can also be composed into a Mini Bus for same-group fan-out, chain, verify, or crew workflows, while `/board` keeps durable Kanban task state outside model memory.
 - **Multi-engine without separate playbooks.** Each bot can choose Codex, Claude, Kimi, DeepSeek, or Antigravity while file delivery and scheduled tasks still go through the same schema-backed `[tool:{...}]` bridge protocol.
 - **Telegram features live in the bridge, not in model memory.** File sending, cron persistence, receipts, access checks, and retries are handled by bridge code, so tasks keep working across model changes, restarts, and resumed sessions.
-- **Short prompts, stable instructions.** Transport rules live in instance-level `agent.md`; per-turn prompts stay small and do not need request ids, temp directories, or side-channel secrets.
+- **Short prompts, stable instructions.** The bridge injects stable channel rules at runtime, instance `agent.md` stays focused on persona/preferences, and request-scoped guidance is isolated to the current prompt without restarting persistent workers.
 - **Receipts over claims.** File delivery and scheduled-task creation produce structured accepted/rejected receipts, so "done" only counts when the bridge actually delivered or scheduled something.
-- **Operable by default.** Timeline logs, audit logs, doctor, dashboard, usage tracking, cron state, and generated-instruction upgrades make failures visible and recovery repeatable.
+- **Operable by default.** Timeline logs, audit logs, doctor, dashboard, usage tracking, cron state, and instruction-migration diagnostics make failures visible and recovery repeatable.
 
 ---
 
@@ -448,8 +448,9 @@ When using the Claude engine, each instance gets a `workspace/` directory. Drop 
 └── .env
 ```
 
-Two layers of instructions, no conflict:
-- **agent.md** → Your bot personality (injected via `--system-prompt`)
+Three layers of instructions, no conflict:
+- **TaroCub runtime instructions** → Bridge-owned channel/tool contract
+- **agent.md** → Your bot personality and durable preferences (injected via `--system-prompt`)
 - **CLAUDE.md** → Project rules (Claude auto-discovers from working directory)
 
 ---
@@ -504,7 +505,7 @@ npm run dev -- telegram service start --instance reviewer
 
 ## Agent Instructions
 
-Each bot has its own `agent.md`. Hot-reloaded on every message — edit anytime, no restart needed.
+Each bot has its own user-owned `agent.md` for persona and durable preferences. It is hot-reloaded on every message, so edits do not require a restart. Telegram delivery, cron, and web-routing rules are injected separately by the bridge and should not be copied into this file.
 
 ```powershell
 npm run dev -- telegram instructions show --instance work
@@ -565,7 +566,7 @@ telegram send --instance bot2 --chat 123456789 --image /absolute/path/to/image.p
 
 Current delivery rules:
 
-- Agents should use `[tool:...]` delivery tags for existing files, images, PDFs, decks, and other binary outputs. This is the only delivery tag format generated instance instructions teach.
+- Agents should use `[tool:...]` delivery tags for existing files, images, PDFs, decks, and other binary outputs. This is the only delivery tag format the bridge-owned runtime instructions teach.
 - `[tool:...]` examples are generated from the registered tool schema/examples; explicit fenced `tool-call` blocks execute through the same parser.
 - `cctb send` remains available for turn-scoped CLI workflows and is internally routed through the same send tool layer.
 - Use `telegram send` when you need the same explicit delivery command outside an active turn, or when the turn-scoped `cctb` helper is unavailable.
@@ -582,14 +583,14 @@ Current delivery rules:
 
 This works for Codex, Claude, Kimi, DeepSeek, Antigravity, process, stream, ACP, and Harness runtimes because the canonical path only requires the agent to emit text. File delivery is explicit: generate the file, emit the tool tag or call the send command, and rely on the resulting receipt.
 
-When upgrading from v4.5.0 or earlier, refresh generated instance instructions with:
+When upgrading an instance that still has a generated Telegram Transport section in `agent.md`, migrate it with:
 
 ```bash
-telegram instructions upgrade --all --dry-run
-telegram instructions upgrade --all
+telegram instructions migrate --all --dry-run
+telegram instructions migrate --all
 ```
 
-This safely replaces old generated Telegram Transport blocks and appends the block when missing. Custom transport sections are left untouched unless you rerun with `--force`. Forced replacements create an `agent.md.bak.<timestamp>` backup next to the original file.
+This removes known generated transport blocks while preserving persona text. Custom transport sections are left untouched unless you rerun with `--force`; forced migration creates an `agent.md.bak.<timestamp>` backup first.
 
 ---
 
@@ -1367,7 +1368,8 @@ npm run dev -- telegram service start --instance agy-bot
 │   .ts       │              │   .ts (Claude)   │ json-store.ts       │
 │ message-    │              │ antigravity-     │ audit-log.ts        │
 │ renderer.ts │              │   adapter.ts     │ timeline-log.ts     │
-│             │              │ agent.md + config│ usage-store.ts      │
+│             │              │ runtime rules +  │ usage-store.ts      │
+│             │              │ agent.md + config│                     │
 │             │              │                  │ crew-run-store.ts   │
 └─────────────┴──────────────┴──────────────────┴─────────────────────┘
 
@@ -1384,7 +1386,7 @@ npm run dev -- telegram service start --instance agy-bot
 
 ```
 Telegram Update → Normalize → Access Check → Chat Queue (serialized)
-    → Load config.json (engine) → Load agent.md → Session Lookup
+    → Load config.json (engine) → Load agent.md persona + runtime channel rules → Session Lookup
     → Codex app-server, Claude stream-json, Kimi ACP, DeepSeek Harness, or persistent Antigravity stream-json worker (new or resume)
     → Typing action + timeline events → Final Render → Deliver → Audit
 ```
@@ -1401,7 +1403,7 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
     </td>
     <td width="50%">
       <h3>Per-Bot Personality</h3>
-      <p>Each instance loads its own <code>agent.md</code>. Claude also reads workspace <code>CLAUDE.md</code>; Kimi bot workspaces receive a managed native main-agent override that preserves Kimi's base and plugin prompt sections.</p>
+      <p>Each instance loads its own persona-only <code>agent.md</code>, while TaroCub injects the channel contract separately. Claude also reads workspace <code>CLAUDE.md</code>; Kimi bot workspaces receive a managed native main-agent override that preserves Kimi's base and plugin prompt sections.</p>
     </td>
   </tr>
   <tr>
@@ -1726,7 +1728,7 @@ Think of it this way: audit answers *"what action did we take"*, timeline answer
 # macOS/Linux: ~/.cctb/<instance>/
 
 <instance>/
-├── agent.md                # Bot personality & instructions
+├── agent.md                # User-owned bot personality & durable preferences
 ├── config.json             # Engine, YOLO mode, verbosity, bus
 ├── usage.json              # Token usage and cost tracking
 ├── workspace/              # Per-bot working directory
@@ -1832,7 +1834,7 @@ A 409 Conflict means two processes are polling the same bot token. The service a
 <details>
 <summary><strong>agent.md changes not taking effect</strong></summary>
 
-No restart needed — loaded fresh on every message. Verify path with `telegram instructions path --instance <name>`.
+Persona changes need no restart because `agent.md` is loaded fresh on every message. Verify the path with `telegram instructions path --instance <name>`. Bridge-owned channel rules are not configured in this file.
 
 </details>
 

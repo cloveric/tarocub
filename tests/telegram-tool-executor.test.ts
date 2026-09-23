@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CronScheduler } from "../src/runtime/cron-scheduler.js";
 import { CronStore } from "../src/state/cron-store.js";
-import { DEFAULT_INSTANCE_AGENT_INSTRUCTIONS } from "../src/commands/access.js";
+import { telegramAgentInstructions } from "../src/telegram/agent-instructions.js";
 import { executeCronAddTool } from "../src/tools/cron-add-tool.js";
 import { executeTelegramTool } from "../src/tools/telegram-tool-executor.js";
 import { defaultTelegramToolRegistry, TelegramToolRegistry } from "../src/tools/telegram-tool-registry.js";
@@ -58,7 +58,7 @@ describe("executeTelegramTool", () => {
 
   it("keeps generated agent examples backed by registered tool examples", () => {
     const tools = new Map(defaultTelegramToolRegistry.list().map((tool) => [tool.name, tool]));
-    const encodedExamples = extractTelegramToolTagMatches(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS)
+    const encodedExamples = extractTelegramToolTagMatches(telegramAgentInstructions())
       .map((match) => JSON.parse(match.payload) as { name: string; payload: unknown });
 
     expect(encodedExamples.length).toBeGreaterThan(0);
@@ -69,19 +69,20 @@ describe("executeTelegramTool", () => {
   });
 
   it("keeps generated agent instructions concise", () => {
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("payload:{message?,images?,files?}");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("cron.list");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("cron.remove");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("cron.toggle");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("list first");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("explicit schedule/remind requests");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("ISO timezone");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("exact URLs use `web_extract`");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).toContain("use `web_search`");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS.length).toBeLessThan(850);
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain("```tool-call");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain("2026-05-01T09:00:00Z");
-    expect(DEFAULT_INSTANCE_AGENT_INSTRUCTIONS).not.toContain('"cron":"0 9 * * 1"');
+    const instructions = telegramAgentInstructions();
+    expect(instructions).toContain("payload:{message?,images?,files?}");
+    expect(instructions).toContain("cron.list");
+    expect(instructions).toContain("cron.remove");
+    expect(instructions).toContain("cron.toggle");
+    expect(instructions).toContain("list first");
+    expect(instructions).toContain("explicit schedule/remind requests");
+    expect(instructions).toContain("ISO timezone");
+    expect(instructions).toContain("exact URLs use `web_extract`");
+    expect(instructions).toContain("use `web_search`");
+    expect(instructions.length).toBeLessThan(850);
+    expect(instructions).not.toContain("```tool-call");
+    expect(instructions).not.toContain("2026-05-01T09:00:00Z");
+    expect(instructions).not.toContain('"cron":"0 9 * * 1"');
   });
 
   it("executes cron.add through the shared tool layer", async () => {

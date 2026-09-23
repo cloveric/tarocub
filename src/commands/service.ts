@@ -1286,14 +1286,15 @@ export async function runServiceDoctor(
       : "No legacy launchd plist detected.",
   });
   const instructions = await inspectInstanceAgentInstructions(env, instanceName);
+  const personaOnlyInstructions = instructions.state === "missing"
+    || instructions.state === "empty"
+    || instructions.state === "persona-only";
   checks.push({
     name: "instructions",
-    ok: instructions.state === "current" || instructions.state === "missing",
-    detail: instructions.state === "current"
-      ? `Instance instructions are current at ${instructions.path}.`
-      : instructions.state === "missing"
-        ? `${instructions.detail}; service can run without it. To add the standard transport block, run "telegram instructions upgrade --instance ${status.instanceName}".`
-        : `${instructions.detail}; run "telegram instructions upgrade --instance ${status.instanceName}"${instructions.state === "custom-transport" ? " or review and use --force" : ""}.`,
+    ok: personaOnlyInstructions,
+    detail: personaOnlyInstructions
+      ? `${instructions.detail}; Telegram transport rules are injected at runtime.`
+      : `${instructions.detail}; run "telegram instructions migrate --instance ${status.instanceName}"${instructions.state === "custom-transport" ? " after review, or add --force to back up and remove it" : ""}.`,
   });
   checks.push({
     name: "sessions",

@@ -618,6 +618,40 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("keeps one worker when only turn-scoped instructions change", async () => {
+    const { children, calls, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+
+    const first = adapter.sendUserMessage("telegram-12345", {
+      text: "first request",
+      files: [],
+      instructions: "Stable Lark contract",
+      turnInstructions: "First-turn delivery check",
+    });
+    await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+    const firstTurn = JSON.parse(children[0].stdin.lines[0] ?? "{}");
+    expect(firstTurn.message.content[0].text).toContain("First-turn delivery check");
+    expect(firstTurn.message.content[0].text).toContain("first request");
+    children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"ONE","session_id":"session-123"}\n');
+    await expect(first).resolves.toEqual({ text: "ONE", sessionId: "session-123", usage: undefined });
+
+    const second = adapter.sendUserMessage("session-123", {
+      text: "second request",
+      files: [],
+      instructions: "Stable Lark contract",
+      turnInstructions: "Second-turn delivery check",
+    });
+    await waitFor(() => children[0].stdin.lines.length === 2);
+    expect(children).toHaveLength(1);
+    expect(calls).toHaveLength(1);
+    const secondTurn = JSON.parse(children[0].stdin.lines[1] ?? "{}");
+    expect(secondTurn.message.content[0].text).toContain("Second-turn delivery check");
+    expect(secondTurn.message.content[0].text).not.toContain("First-turn delivery check");
+    children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"TWO","session_id":"session-123"}\n');
+    await expect(second).resolves.toEqual({ text: "TWO", usage: undefined });
+  });
+
   it("rejects structured error results", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", {

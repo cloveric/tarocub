@@ -32,6 +32,7 @@ import { classifyFailure } from "./runtime/error-classification.js";
 import { loadTelemetryAdapterFromEnv } from "./runtime/telemetry.js";
 import { FileTurnPool } from "./runtime/turn-pool.js";
 import { loadInstanceConfig, readValidatedConfigFile } from "./telegram/instance-config.js";
+import { telegramAgentInstructions } from "./telegram/agent-instructions.js";
 
 export interface ServiceDependencies {
   api: TelegramApi;
@@ -971,6 +972,7 @@ async function createBridgeDependenciesForConfig(
   const telemetry = await loadTelemetryAdapterFromEnv(env);
   const bridge = new Bridge(accessStore, sessionManager, adapter, {
     loadGroupMode: async () => (await loadInstanceConfig(config.stateDir)).groupMode,
+    ...(options.transport === "lark" ? {} : { runtimeInstructions: telegramAgentInstructions }),
     turnPool: maxConcurrentTurns > 0
       ? new FileTurnPool({
         maxActive: maxConcurrentTurns,
