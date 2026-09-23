@@ -79,7 +79,7 @@ export function renderLarkUserFacingError(
     if (category === "engine-backend") {
       return isModelCapacity
         ? "Error: the selected model is temporarily at capacity. Retry shortly or switch models; restarting the instance is not required."
-        : "Error: Codex lost its backend connection (reconnect attempts exhausted). Please retry.";
+        : "Error: the model backend is temporarily overloaded or disconnected. Please retry; restarting the instance is not required.";
     }
     if (category === "engine-quota") {
       return isKimiQuota
@@ -124,7 +124,7 @@ export function renderLarkUserFacingError(
   if (category === "engine-backend") {
     return isModelCapacity
       ? "错误：所选模型当前容量已满。请稍后重试，或临时切换模型；无需重启实例。"
-      : "错误：Codex 连接后端失败（重连耗尽），请重试。";
+      : "错误：模型后端暂时过载或连接中断，请重试；无需重启实例。";
   }
   if (category === "engine-quota") {
     return isKimiQuota

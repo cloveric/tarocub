@@ -26,9 +26,9 @@ describe("Lark delivery preflight", () => {
     expect(result).toEqual({
       ok: true,
       artifacts: [
-        { path: "/workspace/report.md", kind: "file" },
-        { path: "/workspace/report.html", kind: "file" },
-        { path: "/workspace/report.pdf", kind: "file" },
+        { path: "/workspace/report.md", kind: "file", caption: "Report MD" },
+        { path: "/workspace/report.html", kind: "file", caption: "Report HTML" },
+        { path: "/workspace/report.pdf", kind: "file", caption: "Report PDF" },
       ],
       message: "",
     });

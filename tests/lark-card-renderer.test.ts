@@ -898,6 +898,10 @@ describe("lark card renderer", () => {
     expect(cleanCardText(raw)).toBe(raw);
   });
 
+  it("normalizes supported Delta formulas instead of falling back to raw TeX", () => {
+    expect(cleanCardText("变化为 $\\Delta x \\approx 2$")).toBe("变化为 Δ x ≈ 2");
+  });
+
   it("moves bold markers inside quotation marks so inline quotes render in Lark markdown", () => {
     expect(cleanCardText(
       "卖方主张**“上市公司先支付首期款”**，再办理工商过户。",

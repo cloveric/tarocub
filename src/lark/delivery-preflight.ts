@@ -139,7 +139,7 @@ export function normalizeLarkSendTool(name: LarkSendToolName, payload: unknown):
     artifacts.push({
       path: file.path,
       kind,
-      ...(kind === "image" && file.caption ? { caption: file.caption } : {}),
+      ...(file.caption ? { caption: file.caption } : {}),
     });
   }
   for (const filePath of stringArray(record?.audios)) {

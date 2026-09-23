@@ -90,7 +90,12 @@ export function classifyFailure(error: unknown): FailureCategory {
   // (Kimi currently prefixes it with "Authentication required"). Detect the
   // actionable quota text first so users are not told to sign in again.
   if (
+    text.includes("you've hit your usage limit") ||
+    text.includes("you've reached your usage limit") ||
     text.includes("you've reached your 5-hour usage limit") ||
+    text.includes("quota exceeded") ||
+    text.includes("usage limit exceeded") ||
+    text.includes("usagelimitexceeded") ||
     text.includes("quota will reset when the current") ||
     text.includes("purchase extra usage") ||
     text.includes("insufficient_quota") ||

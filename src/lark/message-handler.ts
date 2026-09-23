@@ -208,6 +208,23 @@ export function classifyLarkTurnTermination(error: unknown, signal: AbortSignal 
   return { kind: "error" };
 }
 
+function isAwaitedUnmentionedLarkAttachment(
+  runtime: LarkServiceRuntime,
+  normalized: LarkNormalizedBridgeMessage,
+  exactConversation = true,
+): boolean {
+  if (normalized.bridgeChatType !== "group" || normalized.attachments.length === 0) {
+    return false;
+  }
+  const batches = exactConversation
+    ? [runtime.pendingBatches.get(normalized.conversationKey)]
+    : [...runtime.pendingBatches.values()].filter((batch) => batch.normalized.chatId === normalized.chatId);
+  return batches.some((batch) => (
+    batch?.awaitingAttachment === true
+    && batch.normalized.senderId === normalized.senderId
+  ));
+}
+
 export async function handleLarkMessage(input: {
   channel: LarkChannelLike;
   bridge: LarkBridgeLike;
@@ -228,15 +245,28 @@ export async function handleLarkMessage(input: {
     requireMentionInGroup,
   });
   if (!preflightNormalized) {
-    return false;
+    const unmentionedCandidate = normalizeLarkMessage(input.message, { requireMentionInGroup: false });
+    if (
+      !unmentionedCandidate
+      || !isAwaitedUnmentionedLarkAttachment(input.runtime, unmentionedCandidate, false)
+    ) {
+      return false;
+    }
   }
 
   const message = await resolveLarkMessageChatMode(input.channel, input.runtime, input.message);
-  const baseNormalized = normalizeLarkMessage(message, {
+  let baseNormalized = normalizeLarkMessage(message, {
     requireMentionInGroup,
   });
   if (!baseNormalized) {
-    return false;
+    const unmentionedCandidate = normalizeLarkMessage(message, { requireMentionInGroup: false });
+    if (
+      !unmentionedCandidate
+      || !isAwaitedUnmentionedLarkAttachment(input.runtime, unmentionedCandidate)
+    ) {
+      return false;
+    }
+    baseNormalized = unmentionedCandidate;
   }
   const expandedNormalized = await enrichLarkMergedForwardContext(input.channel, baseNormalized, message);
   const cardNormalized = await enrichLarkInteractiveCardContext(input.channel, expandedNormalized, message);
@@ -1062,9 +1092,18 @@ function announcesUpcomingLarkAttachment(text: string): boolean {
     return false;
   }
 
-  const chineseAnnouncement = /(?:我(?:会|要|来|这就)?|这就|马上|待会儿?|等会儿?|稍后|随后|接着|下一(?:条|个)|下条).{0,8}(?:发(?!现|布|票|生|挥|明|起|热|言)|传|上传|补发|贴).{0,16}(?:截图|图片?|照片|文件|附件|文档|表格|压缩包|视频|音频|录音)/;
-  const englishAnnouncement = /\b(?:i(?:['’]ll| will| am going to|['’]m going to)?|let me|about to|next message(?: will)?)\s{0,3}(?:send|upload|attach|share|post)\b.{0,50}\b(?:image|photo|picture|screenshot|file|attachment|document|pdf|video|audio)\b/i;
-  return chineseAnnouncement.test(normalized) || englishAnnouncement.test(normalized);
+  const attachment = "(?:截图|图片?|照片|文件|附件|文档|表格|压缩包|视频|音频|录音)";
+  const send = "(?:发(?!现|布|票|生|挥|明|起|热|言)|传|上传|补发|贴)";
+  const chineseTimedAnnouncement = new RegExp(
+    `(?:马上|待会儿?|等会儿?|等下|稍后|随后|接着|下一(?:条|个)|下条|一会儿?|这就|我(?:会|准备|打算|马上|待会儿?|等会儿?|等下|稍后|随后|接着|先|再|这就)).{0,8}${send}.{0,16}${attachment}`,
+  );
+  const chineseImmediateAnnouncement = new RegExp(
+    `(?:^|[，。！？!?\\s])我(?:先|再)?${send}(?:给你|你|过来)?(?:一|两|几)?(?:个|张|份|组|段)?${attachment}(?:给你|过来)?`,
+  );
+  const englishAnnouncement = /\b(?:i(?:['’]ll| will| am going to|['’]m going to| am about to)|let me|next message(?: will)?)\s+(?:(?:send|share)\s+(?:you\s+)?(?:an?\s+|the\s+|this\s+|that\s+|my\s+)?(?:image|photo|picture|screenshot|file|attachment|document|pdf|video|audio)\b|(?:upload|attach|post)\b.{0,40}\b(?:image|photo|picture|screenshot|file|attachment|document|pdf|video|audio)\b)/i;
+  return chineseTimedAnnouncement.test(normalized)
+    || chineseImmediateAnnouncement.test(normalized)
+    || englishAnnouncement.test(normalized);
 }
 
 const LARK_STEER_ACK_EMOJI = "OK";

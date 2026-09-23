@@ -1505,6 +1505,8 @@ const LARK_INLINE_MATH_SYMBOLS: Readonly<Record<string, string>> = {
   geq: "≥",
   pm: "±",
   infty: "∞",
+  Delta: "Δ",
+  delta: "δ",
 };
 
 const LARK_SUPPORTED_MATH_COMMANDS = new Set([
@@ -1565,7 +1567,7 @@ function normalizeLarkMathBody(body: string): string {
 
   output = output
     .replace(/\\(?:left|right)\b/g, "")
-    .replace(/\\(rightarrow|Rightarrow|leftarrow|Leftarrow|leftrightarrow|Leftrightarrow|to|div|times|cdot|approx|sim|neq|ne|leq|le|geq|ge|pm|infty)\b/g, (_match, command: string) => (
+    .replace(/\\(rightarrow|Rightarrow|leftarrow|Leftarrow|leftrightarrow|Leftrightarrow|to|div|times|cdot|approx|sim|neq|ne|leq|le|geq|ge|pm|infty|Delta|delta)\b/g, (_match, command: string) => (
       LARK_INLINE_MATH_SYMBOLS[command] ?? command
     ))
     .replace(/\\[,;:!]\s*/g, " ")

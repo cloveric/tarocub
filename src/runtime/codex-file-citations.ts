@@ -24,34 +24,50 @@ export function renderCodexFileCitations(
   }
 
   let output = "";
-  let cursor = 0;
+  let prose = "";
+  let fencedOpening = "";
+  let fencedBody = "";
   let fence: { marker: string; length: number } | undefined;
-  while (cursor < text.length) {
-    const newline = text.indexOf("\n", cursor);
-    const lineEnd = newline === -1 ? text.length : newline;
-    const line = text.slice(cursor, lineEnd);
-    const match = /^(?:\s{0,3}>\s?)*\s{0,3}(`{3,}|~{3,})(.*)$/u.exec(line.replace(/\r$/u, ""));
+  const lines = text.match(/[^\r\n]*(?:\r\n|\n|\r|$)/gu) ?? [];
+  if (lines.at(-1) === "") lines.pop();
+
+  const flushProse = () => {
+    output += renderCodexAnnotationProse(prose, locale, options.streaming === true);
+    prose = "";
+  };
+
+  for (const lineWithEnding of lines) {
+    const line = lineWithEnding.replace(/(?:\r\n|\n|\r)$/u, "");
+    const match = /^(?:\s{0,3}>\s?)*\s{0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
     if (fence) {
-      output += line;
       if (
         match
         && match[1]![0] === fence.marker
         && match[1]!.length >= fence.length
         && !match[2]!.trim()
       ) {
+        output += fencedOpening + fencedBody + lineWithEnding;
+        fencedOpening = "";
+        fencedBody = "";
         fence = undefined;
+      } else {
+        fencedBody += lineWithEnding;
       }
     } else if (match) {
-      output += line;
+      flushProse();
+      fencedOpening = lineWithEnding;
       fence = { marker: match[1]![0]!, length: match[1]!.length };
     } else {
-      output += renderCodexAnnotationProse(line, locale, options.streaming === true);
+      prose += lineWithEnding;
     }
-    if (newline === -1) {
-      break;
-    }
-    output += "\n";
-    cursor = newline + 1;
+  }
+
+  flushProse();
+  if (fence) {
+    // An unfinished fence is not a trustworthy literal region: otherwise one
+    // missing closing line exposes every later UI annotation and local path.
+    output += fencedOpening;
+    output += renderCodexAnnotationProse(fencedBody, locale, options.streaming === true);
   }
 
   return output;
@@ -79,9 +95,8 @@ function renderCodexAnnotationProse(text: string, locale: CitationLocale, stream
       const label = sanitizeFollowupLabel(text.slice(labelStart, labelEnd));
       const bodyStart = labelEnd + 1;
       if (text[bodyStart] !== "{") {
-        output += label || unavailableFollowup(locale);
-        cursor = bodyStart;
-        continue;
+        output += unavailableFollowup(locale);
+        break;
       }
       const markerEnd = findCitationEnd(text, bodyStart + 1);
       output += label || unavailableFollowup(locale);
@@ -121,7 +136,7 @@ function findFollowupLabelEnd(text: string, start: number): number {
       escaped = false;
     } else if (char === "\\") {
       escaped = true;
-    } else if (char === "]") {
+    } else if (char === "]" && text[index + 1] === "{") {
       return index;
     }
   }

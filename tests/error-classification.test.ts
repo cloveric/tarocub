@@ -48,6 +48,12 @@ describe("classifyFailure auth detection", () => {
     expect(en).toContain("signing in again or restarting will not help");
   });
 
+  it("classifies current Codex usage-limit messages and structured codes as quota", () => {
+    expect(classifyFailure(new Error("You've hit your usage limit"))).toBe("engine-quota");
+    expect(classifyFailure(new Error("Quota exceeded"))).toBe("engine-quota");
+    expect(classifyFailure(new Error("Codex error code: usageLimitExceeded"))).toBe("engine-quota");
+  });
+
   it("renders the Antigravity startup auth failure instead of restart advice", () => {
     const error = new Error(
       "Antigravity emitted result before init\n\n" +
@@ -115,10 +121,10 @@ describe("classifyFailure specificity", () => {
 
   it("renders a clear retry message for engine-backend instead of the generic run-failed one", () => {
     const err = new Error("Reconnecting... 5/5");
-    expect(renderLarkUserFacingError(err, "engine", "zh")).toContain("Codex 连接后端失败");
+    expect(renderLarkUserFacingError(err, "engine", "zh")).toContain("模型后端暂时过载或连接中断");
     expect(renderLarkUserFacingError(err, "engine", "zh")).toContain("请重试");
     expect(renderLarkUserFacingError(err, "engine", "zh")).not.toContain("本轮运行失败");
-    expect(renderLarkUserFacingError(err, "engine", "en")).toContain("backend connection");
+    expect(renderLarkUserFacingError(err, "engine", "en")).toContain("model backend is temporarily overloaded or disconnected");
   });
 
   it("renders model-capacity failures with actionable retry guidance", () => {

@@ -1421,6 +1421,8 @@ function normalizeKimiElicitationForm(
       header,
       multi_select: multiSelect,
       required: required.has(key),
+      ...(multiSelect && typeof schema.minItems === "number" ? { min_selections: schema.minItems } : {}),
+      ...(multiSelect && typeof schema.maxItems === "number" ? { max_selections: schema.maxItems } : {}),
       options: options.map((option) => ({
         label: option.label,
         ...(option.description ? { description: option.description } : {}),

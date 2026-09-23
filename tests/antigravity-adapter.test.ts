@@ -197,15 +197,14 @@ describe("ProcessAntigravityAdapter", () => {
     expect(terminalEvents).toHaveLength(1);
   });
 
-  it("does not declare a persistent turn inactive while a foreground tool is outstanding", async () => {
+  it("stops a persistent turn when a foreground tool stays silent past the inactivity ceiling", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const adapter = new ProcessAntigravityAdapter(
       "agy", { HOME: "/tmp/home" }, spawnAntigravity, undefined, undefined, undefined,
       5_000, 200,
     );
-    let settled = false;
     const turn = adapter.sendUserMessage("telegram-12345", { text: "Run a long command", files: [] });
-    void turn.then(() => { settled = true; }, () => { settled = true; });
+    const rejected = expect(turn).rejects.toThrow("became inactive after 1 minutes");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
     child.stdout.emitData(jsonLine({
@@ -216,29 +215,18 @@ describe("ProcessAntigravityAdapter", () => {
       },
     }));
 
-    await new Promise((resolve) => setTimeout(resolve, 450));
-    expect(settled).toBe(false);
-
-    child.stdout.emitData(jsonLine({
-      event: "step_update",
-      step_update: {
-        conversation_id: CONVERSATION_ID, step_index: 2, state: "DONE", step_type: "tool",
-        tool_name: "run_command", tool_info: { name: "run_command", output: "" },
-      },
-    }));
-    await expect(turn).rejects.toThrow("became inactive after 1 minutes");
+    await rejected;
     expect(child.stdin.ended).toBe(true);
   });
 
-  it("does not declare a native goal inactive while a foreground tool is outstanding", async () => {
+  it("stops a native goal when a foreground tool stays silent past the inactivity ceiling", async () => {
     const { spawnAntigravity, child, calls } = createSpawnHarness();
     const adapter = new ProcessAntigravityAdapter(
       "agy", { HOME: "/tmp/home" }, spawnAntigravity, undefined, undefined, undefined,
       5_000, 200,
     );
-    let settled = false;
     const turn = adapter.sendUserMessage("telegram-12345", { text: "/goal run a long command", files: [] });
-    void turn.then(() => { settled = true; }, () => { settled = true; });
+    const rejected = expect(turn).rejects.toThrow("became inactive after 1 minutes");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
     child.stdout.emitData(jsonLine({
@@ -249,17 +237,8 @@ describe("ProcessAntigravityAdapter", () => {
       },
     }));
 
-    await new Promise((resolve) => setTimeout(resolve, 450));
-    expect(settled).toBe(false);
-
-    child.stdout.emitData(jsonLine({
-      event: "step_update",
-      step_update: {
-        conversation_id: CONVERSATION_ID, step_index: 2, state: "DONE", step_type: "tool",
-        tool_name: "run_command", tool_info: { name: "run_command", output: "" },
-      },
-    }));
-    await expect(turn).rejects.toThrow("became inactive after 1 minutes");
+    await rejected;
+    expect(child.stdin.ended).toBe(true);
   });
 
   it("uses streamed answer text when a successful result carries an empty response", async () => {
@@ -893,6 +872,68 @@ describe("ProcessAntigravityAdapter", () => {
     child.close(0);
 
     await expect(promise).rejects.toThrow("upstream disconnected");
+  });
+
+  it("delivers a completed persistent answer when agy repeats a stale session error in the result", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Answer despite old error", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID,
+        step_index: 8,
+        state: "DONE",
+        step_type: "agent_response",
+        text_delta: "complete current answer",
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: {
+        conversation_id: CONVERSATION_ID,
+        status: "ERROR",
+        response: "complete current answer",
+        error: "old 503 from an earlier turn",
+      },
+    }));
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({ text: "complete current answer" });
+  });
+
+  it("delivers a completed native-goal answer when agy repeats a stale session error in the result", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage(CONVERSATION_ID, { text: "/goal verify output", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID,
+        step_index: 9,
+        state: "DONE",
+        step_type: "agent_response",
+        text_delta: "verified goal result",
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: {
+        conversation_id: CONVERSATION_ID,
+        status: "ERROR",
+        response: "verified goal result",
+        error: "old 401 from an earlier turn",
+      },
+    }));
+    child.close(0);
+
+    await expect(promise).resolves.toMatchObject({ text: "verified goal result" });
   });
 
   it("retries once when agy authentication fails before init", async () => {

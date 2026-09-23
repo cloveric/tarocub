@@ -1325,6 +1325,115 @@ describe("lark service", () => {
     }
   });
 
+  it("does not hold messages that refer to attachments already sent or meant for someone else", async () => {
+    vi.useFakeTimers();
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-past-attachment-text-"));
+    const channel = fakeChannel();
+    const bridge = { handleAuthorizedMessage: vi.fn(async () => ({ text: "answered" })) };
+    const runtime = createLarkServiceRuntime();
+    const phrases = [
+      "我刚发的截图是什么意思",
+      "我昨天发你的图片看了吗",
+      "我之前发的文件还在吗",
+      "我要发给客户的文档帮我润色一下",
+      "我发的表格第三列不对",
+    ];
+
+    try {
+      for (const [index, content] of phrases.entries()) {
+        const turn = handleLarkMessage({
+          channel,
+          bridge,
+          runtime,
+          stateDir,
+          message: fakeLarkMessage({ messageId: `om_past_${index}`, content }),
+        });
+        await vi.waitFor(() => {
+          expect(runtime.pendingBatches.size > 0 || bridge.handleAuthorizedMessage.mock.calls.length > index).toBe(true);
+        });
+        if (runtime.pendingBatches.size > 0) {
+          expect([...runtime.pendingBatches.values()][0]?.awaitingAttachment).toBe(false);
+        }
+        await vi.advanceTimersByTimeAsync(500);
+        await turn;
+      }
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(phrases.length);
+    } finally {
+      for (const batch of runtime.pendingBatches.values()) clearTimeout(batch.timer);
+      runtime.pendingBatches.clear();
+      vi.useRealTimers();
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts an unmentioned group attachment only for the same sender's announced batch", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-group-announced-image-"));
+    const channel = fakeChannel({
+      rawClient: {
+        im: {
+          v1: {
+            messageResource: {
+              get: vi.fn(async () => ({ getReadableStream: () => Readable.from([Buffer.from("image-bytes")]) })),
+            },
+          },
+        },
+      },
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async (request: { files: string[] }) => ({ text: `received ${request.files.length}` })),
+    };
+    const runtime = createLarkServiceRuntime();
+
+    try {
+      const instruction = handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          chatId: "oc_group",
+          chatType: "group",
+          chatMode: "group",
+          messageId: "om_instruction",
+          senderId: "ou_user",
+          mentionedBot: true,
+          content: "我待会发你截图，帮我看看哪里错了",
+        }),
+      });
+      await vi.waitFor(() => expect(runtime.pendingBatches.size).toBe(1));
+      const image = handleLarkMessage({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        requireMentionInGroup: true,
+        message: fakeLarkMessage({
+          chatId: "oc_group",
+          chatType: "group",
+          chatMode: "group",
+          messageId: "om_image",
+          senderId: "ou_user",
+          mentionedBot: false,
+          content: "",
+          rawContentType: "image",
+          resources: [{ type: "image", fileKey: "key_image" }],
+        }),
+      });
+
+      await Promise.all([instruction, image]);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
+        files: [expect.any(String)],
+        text: expect.stringContaining("帮我看看哪里错了"),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   it("keeps same-named files from a merged burst distinct instead of overwriting", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-burst-collide-"));
     const channel = fakeChannel({
@@ -11136,6 +11245,11 @@ describe("lark service", () => {
       for (const filePath of paths) {
         expect(channel.send).toHaveBeenCalledWith(
           "oc_chat",
+          { markdown: path.basename(filePath) },
+          { replyTo: "om_kimi_captioned_files" },
+        );
+        expect(channel.send).toHaveBeenCalledWith(
+          "oc_chat",
           { file: { source: Buffer.from(path.basename(filePath)), fileName: path.basename(filePath) } },
           { replyTo: "om_kimi_captioned_files" },
         );
@@ -14005,6 +14119,163 @@ describe("lark service", () => {
     }
   });
 
+  it("preserves a custom rich card body when settling its choice", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-rich-card-settle-"));
+    const runtime = createLarkServiceRuntime();
+    const create = vi.fn(async () => ({ data: { card_id: "card_rich" } }));
+    const update = vi.fn(async () => ({ data: {} }));
+    const reply = vi.fn(async () => ({ data: { message_id: "om_rich" } }));
+    const channel = fakeChannel({
+      rawClient: {
+        cardkit: { v1: { card: { create, update } } },
+        im: { v1: { message: { reply } } },
+      },
+    });
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({ text: "segment detail" })),
+    };
+
+    try {
+      const card = {
+        schema: "2.0",
+        body: {
+          elements: [
+            { tag: "markdown", content: "Q3 revenue: 123.4M (+18% YoY). Gross margin 41%." },
+            { tag: "button", text: { tag: "plain_text", content: "Show segment detail" } },
+          ],
+        },
+      };
+      await deliverLarkResponse({
+        channel,
+        runtime,
+        chatId: "oc_chat",
+        replyTo: "om_user",
+        text: ["```tool-call", JSON.stringify({ name: "lark.card", payload: { card } }), "```"].join("\n"),
+        stateDir,
+        conversationKey: "lark:oc_chat",
+        bridgeChatType: "private",
+      });
+
+      await handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "om_rich",
+          operator: { openId: "ou_user" },
+          action: {
+            value: {
+              cctb_lark: "choice",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              label: "Show segment detail",
+              value: "show-segments",
+            },
+          },
+        },
+      });
+
+      await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1), { timeout: 2500 });
+      const settled = JSON.stringify(update.mock.calls[0]);
+      expect(settled).toContain("Q3 revenue: 123.4M");
+      expect(settled).toContain("Show segment detail");
+      expect(settled).toContain("已选择");
+      expect(settled).not.toContain('"cctb_lark":"choice"');
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("closes and reports a choice turn that fails before the engine starts", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-choice-preflight-error-"));
+    await writeFile(path.join(stateDir, "workspace"), "not a directory");
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = { handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })) };
+
+    try {
+      await expect(handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "om_choice",
+          operator: { openId: "ou_user" },
+          action: {
+            value: {
+              cctb_lark: "choice",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              label: "A",
+              value: "a",
+            },
+          },
+        },
+      })).resolves.toBe(true);
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { text: expect.stringContaining("本轮运行失败") },
+        { replyTo: "om_choice" },
+      );
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        outcome: "error",
+        metadata: expect.objectContaining({ action: "choice", larkMessageId: "om_choice" }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("closes an archive continuation card after its waiting workflow is gone", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-archive-noop-"));
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const bridge = { handleAuthorizedMessage: vi.fn(async () => ({ text: "should not run" })) };
+
+    try {
+      await expect(handleLarkCardAction({
+        channel,
+        bridge,
+        runtime,
+        stateDir,
+        event: {
+          chatId: "oc_chat",
+          messageId: "om_archive",
+          operator: { openId: "ou_user" },
+          action: {
+            value: {
+              cctb_lark: "continue_archive",
+              conversationKey: "lark:oc_chat",
+              bridgeChatType: "private",
+              uploadId: "upload_gone",
+            },
+          },
+        },
+      })).resolves.toBe(true);
+      await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
+
+      expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        outcome: "noop",
+        metadata: expect.objectContaining({ action: "continue_archive", larkMessageId: "om_archive" }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes the configured Lark locale into interactive card choice turns", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-choice-locale-"));
     await writeFile(path.join(stateDir, "config.json"), JSON.stringify({ locale: "en" }) + "\n");
@@ -15674,6 +15945,62 @@ describe("lark service", () => {
     expect(card).toContain("请先选择");
     expect(card).toContain("Traits");
     void pending;
+  });
+
+  it("shows and enforces Kimi multi-select bounds before resolving the form", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "kimi",
+        toolName: "AskUserQuestion",
+        toolInput: {
+          questions: [{
+            question: "Which traits?",
+            header: "Traits",
+            multi_select: true,
+            required: true,
+            min_selections: 2,
+            max_selections: 3,
+            options: [{ label: "Fast" }, { label: "Safe, stable" }, { label: "Thorough" }],
+          }],
+        },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalled());
+    expect(JSON.stringify(channel.send.mock.calls[0])).toContain("至少 2 项");
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: {
+        chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: {
+          value: { cctb_lark: "ask_user_question", action: "form_submit", requestId },
+          form_value: { q0: ["1"] },
+        },
+      },
+    });
+
+    expect(runtime.pendingApprovals.size).toBe(1);
+    expect(JSON.stringify(channel.send.mock.calls)).toContain("请至少选择 2 项");
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: {
+        chatId: "oc_chat", messageId: "om_card_retry", operator: { openId: "ou_user" },
+        action: {
+          value: { cctb_lark: "ask_user_question", action: "form_submit", requestId },
+          form_value: { q0: ["1", "2"] },
+        },
+      },
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      behavior: "allow",
+      updatedInput: { answers: { "Which traits?": "Safe, stable, Thorough" } },
+    });
   });
 
   it("parses a multi-select form value delivered as a JSON string", async () => {

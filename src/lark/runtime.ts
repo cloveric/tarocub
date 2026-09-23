@@ -127,6 +127,8 @@ export interface LarkQueueCardRef {
 export interface LarkChoiceCardRef {
   messageId: string;
   handle?: ManagedCardHandle;
+  originalCard?: Record<string, unknown>;
+  preserveBody?: boolean;
   status: "active" | "resolved";
   createdAt: number;
   selectedLabel?: string;

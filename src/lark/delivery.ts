@@ -98,19 +98,32 @@ export async function sendTrackedLarkChoiceCard(input: {
   fallbackText: string;
   options?: LarkSendOptions;
   locale: Locale;
+  preserveBody?: boolean;
 }): Promise<void> {
   const managed = await sendManagedCard(input.channel, input.chatId, input.card, {
     ...(input.options?.replyTo ? { replyTo: input.options.replyTo } : {}),
     ...(input.options?.replyInThread ? { replyInThread: true } : {}),
   });
   if (managed) {
-    trackLarkChoiceCard(input.runtime, managed.messageId, managed);
+    trackLarkChoiceCard(
+      input.runtime,
+      managed.messageId,
+      managed,
+      input.preserveBody ? input.card : undefined,
+      input.preserveBody,
+    );
     return;
   }
 
   const sent = await sendLarkCardWithFallback(input);
   if (!sent.fallback) {
-    trackLarkChoiceCard(input.runtime, sent.messageId);
+    trackLarkChoiceCard(
+      input.runtime,
+      sent.messageId,
+      undefined,
+      input.preserveBody ? input.card : undefined,
+      input.preserveBody,
+    );
   }
 }
 
@@ -118,11 +131,15 @@ export function trackLarkChoiceCard(
   runtime: LarkServiceRuntime,
   messageId: string,
   handle?: ManagedCardHandle,
+  originalCard?: object,
+  preserveBody = false,
 ): void {
   runtime.choiceCards.delete(messageId);
   runtime.choiceCards.set(messageId, {
     messageId,
     ...(handle ? { handle } : {}),
+    ...(originalCard ? { originalCard: structuredClone(originalCard) as Record<string, unknown> } : {}),
+    ...(preserveBody ? { preserveBody: true } : {}),
     status: "active",
     createdAt: Date.now(),
   });
@@ -196,12 +213,16 @@ export function buildLarkRecoveryResponse(text: string): string {
   const pathsFor = (kind: LarkSendPathKind): string[] => toolArtifacts
     .filter((artifact) => artifact.kind === kind)
     .map((artifact) => artifact.path);
+  const fileEntries = toolArtifacts
+    .filter((artifact) => artifact.kind === "file")
+    .map((artifact) => artifact.caption
+      ? { path: artifact.path, caption: artifact.caption }
+      : artifact.path);
   const payload: Record<string, unknown> = {};
   if (images.length > 0) payload.images = images;
-  const files = pathsFor("file");
   const audios = pathsFor("audio");
   const videos = pathsFor("video");
-  if (files.length > 0) payload.files = files;
+  if (fileEntries.length > 0) payload.files = fileEntries;
   if (audios.length > 0) payload.audios = audios;
   if (videos.length > 0) payload.videos = videos;
   if (toolMessages.length > 0) payload.message = toolMessages.join("\n\n");
@@ -799,7 +820,7 @@ async function executeLarkToolTag(input: {
       locale: input.locale,
     };
     if (JSON.stringify(card).includes('"cctb_lark":"choice"')) {
-      await sendTrackedLarkChoiceCard({ ...cardInput, runtime: input.runtime });
+      await sendTrackedLarkChoiceCard({ ...cardInput, runtime: input.runtime, preserveBody: true });
     } else {
       await sendLarkCardWithFallback(cardInput);
     }
@@ -906,7 +927,7 @@ async function sendLarkPath(input: {
   bridgeChatType?: "private" | "group";
   larkMessageId?: string;
   locale: Locale;
-  /** Optional title for an image — renders it as a caption + image card. */
+  /** Optional artifact title. Images keep it in-card; other media sends it as markdown. */
   caption?: string;
 }): Promise<boolean> {
   const deliveryRoots = await resolveLarkDeliveryRoots(input);
@@ -970,6 +991,14 @@ async function sendLarkPath(input: {
       realPath: real,
       originalPath: input.filePath,
     });
+  }
+  if (input.caption) {
+    await sendLarkMarkdown(
+      input.channel,
+      input.chatId,
+      input.caption,
+      larkReplyOptions(input.replyTo, input.replyInThread),
+    ).catch(() => undefined);
   }
   // The payload was read fine — a throw from here on is Feishu rejecting the
   // upload, so report "upload-failed" (with the file's name), not "read failed".

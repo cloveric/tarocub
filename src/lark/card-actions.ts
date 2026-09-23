@@ -62,6 +62,8 @@ type AskUserQuestionCardQuestion = {
   header: string;
   multiSelect: boolean;
   required: boolean;
+  minSelections?: number;
+  maxSelections?: number;
   options: AskUserQuestionOption[];
 };
 
@@ -334,7 +336,19 @@ function renderLarkAskUserQuestionCard(input: {
     if (index > 0) {
       formElements.push({ tag: "hr" });
     }
-    const multiHint = question.multiSelect ? (locale === "en" ? " (multi-select)" : "（多选）") : "";
+    const limitHint = question.multiSelect
+      ? [
+        question.minSelections !== undefined
+          ? (locale === "en" ? `at least ${question.minSelections}` : `至少 ${question.minSelections} 项`)
+          : undefined,
+        question.maxSelections !== undefined
+          ? (locale === "en" ? `at most ${question.maxSelections}` : `最多 ${question.maxSelections} 项`)
+          : undefined,
+      ].filter(Boolean).join(locale === "en" ? ", " : "，")
+      : "";
+    const multiHint = question.multiSelect
+      ? (locale === "en" ? ` (multi-select${limitHint ? `; ${limitHint}` : ""})` : `（多选${limitHint ? `；${limitHint}` : ""}）`)
+      : "";
     formElements.push({
       tag: "markdown",
       content: `**${question.header}${multiHint}**\n${question.question}`,
@@ -606,10 +620,31 @@ function normalizeAskUserQuestions(toolInput: unknown): AskUserQuestionCardQuest
         // Claude and legacy payloads require every answer. Kimi ACP form
         // elicitation marks optional schema properties explicitly false.
         required: question.required !== false,
+        ...(question.multiSelect === true || question.multi_select === true
+          ? normalizeAskSelectionBounds(question)
+          : {}),
         options,
       };
     })
     .filter((question): question is AskUserQuestionCardQuestion => question !== null);
+}
+
+function normalizeAskSelectionBounds(question: Record<string, unknown>): {
+  minSelections?: number;
+  maxSelections?: number;
+} {
+  const minRaw = question.minSelections ?? question.min_selections;
+  const maxRaw = question.maxSelections ?? question.max_selections;
+  const minSelections = typeof minRaw === "number" && Number.isInteger(minRaw) && minRaw >= 0
+    ? minRaw
+    : undefined;
+  const maxSelections = typeof maxRaw === "number" && Number.isInteger(maxRaw) && maxRaw >= 0
+    ? maxRaw
+    : undefined;
+  return {
+    ...(minSelections !== undefined ? { minSelections } : {}),
+    ...(maxSelections !== undefined ? { maxSelections } : {}),
+  };
 }
 
 function objectValue(value: unknown): Record<string, unknown> | null {
@@ -1223,6 +1258,13 @@ export async function handleLarkCardAction(input: {
     const replyOpts = larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread);
     const questions = normalizeAskUserQuestions(pending.askUserQuestionInput);
     const formValue = larkCardActionFormValue(input.event);
+    const selectedCounts = questions.map((question, index) => {
+      const selected = askFormSelectedValues(formValue[askFormFieldName(index)]).length;
+      const other = pending.approvalEngine === "kimi"
+        ? ""
+        : stringValue(formValue[askFormOtherFieldName(index)])?.trim() ?? "";
+      return selected + (other ? 1 : 0);
+    });
 
     // Record that the submit ARRIVED, before any of the branches below can
     // swallow it. Only the stop button was writing a timeline entry, so a
@@ -1318,12 +1360,37 @@ export async function handleLarkCardAction(input: {
     // second submit never left the client — "I selected it and it still won't
     // go through". So re-render the form IN PLACE, carrying the picks already
     // made so nothing has to be redone.
-    const missingRequired = questions.filter(
-      (question) => question.required && !(answers[question.question] ?? "").trim(),
-    );
-    if (missingRequired.length > 0) {
-      const names = missingRequired.map((question) => question.header).join(locale === "en" ? ", " : "、");
-      const notice = locale === "en" ? `Please choose an answer for: ${names}` : `请先选择：${names}`;
+    const missingRequired = questions.filter((question, index) => (
+      question.required && selectedCounts[index] === 0 && !(answers[question.question] ?? "").trim()
+    ));
+    const belowMinimum = questions.filter((question, index) => (
+      question.multiSelect
+      && question.minSelections !== undefined
+      && selectedCounts[index]! > 0
+      && selectedCounts[index]! < question.minSelections
+    ));
+    const aboveMaximum = questions.filter((question, index) => (
+      question.multiSelect
+      && question.maxSelections !== undefined
+      && selectedCounts[index]! > question.maxSelections
+    ));
+    if (missingRequired.length > 0 || belowMinimum.length > 0 || aboveMaximum.length > 0) {
+      const notices: string[] = [];
+      if (missingRequired.length > 0) {
+        const names = missingRequired.map((question) => question.header).join(locale === "en" ? ", " : "、");
+        notices.push(locale === "en" ? `Please choose an answer for: ${names}` : `请先选择：${names}`);
+      }
+      for (const question of belowMinimum) {
+        notices.push(locale === "en"
+          ? `${question.header}: choose at least ${question.minSelections} options`
+          : `${question.header}：请至少选择 ${question.minSelections} 项`);
+      }
+      for (const question of aboveMaximum) {
+        notices.push(locale === "en"
+          ? `${question.header}: choose at most ${question.maxSelections} options`
+          : `${question.header}：最多选择 ${question.maxSelections} 项`);
+      }
+      const notice = notices.join(locale === "en" ? ". " : "；");
       const retryCard = renderLarkAskUserQuestionCard({
         requestId: value.requestId,
         toolInput: pending.askUserQuestionInput,
@@ -1350,7 +1417,7 @@ export async function handleLarkCardAction(input: {
       } else {
         await postRetryFallback();
       }
-      await logCardSubmit("rejected", "choice_missing_answer");
+      await logCardSubmit("rejected", "choice_invalid_selection_count");
       return true;
     }
     await logCardSubmit("received", "choice_submit");
@@ -1626,6 +1693,7 @@ export async function handleLarkCardAction(input: {
         bridgeChatType,
         userId,
         text,
+        locale,
         instanceName: input.instanceName,
       });
       return true;
@@ -1649,7 +1717,21 @@ export async function handleLarkCardAction(input: {
         return true;
       },
     });
-    void queued.catch(() => undefined);
+    void queued.catch(async (error) => {
+      await reportQueuedLarkCardActionFailure({
+        channel: input.channel,
+        stateDir: input.stateDir!,
+        chatId: input.event.chatId,
+        replyTo: input.event.messageId,
+        replyInThread,
+        conversationKey: value.conversationKey as string,
+        bridgeChatType,
+        userId,
+        action: "choice",
+        locale,
+        error,
+      });
+    });
     return true;
   }
 
@@ -1718,6 +1800,7 @@ export async function handleLarkCardAction(input: {
         bridgeChatType,
         uploadId: value.uploadId as string,
         userId,
+        locale,
         instanceName: input.instanceName,
       });
       return true;
@@ -1741,7 +1824,21 @@ export async function handleLarkCardAction(input: {
         return true;
       },
     });
-    void queued.catch(() => undefined);
+    void queued.catch(async (error) => {
+      await reportQueuedLarkCardActionFailure({
+        channel: input.channel,
+        stateDir: input.stateDir!,
+        chatId: input.event.chatId,
+        replyTo: input.event.messageId,
+        replyInThread,
+        conversationKey: value.conversationKey as string,
+        bridgeChatType,
+        userId,
+        action: "continue_archive",
+        locale,
+        error,
+      });
+    });
     return true;
   }
 
@@ -1873,6 +1970,8 @@ function claimLarkChoiceCard(
   const claimed: LarkChoiceCardRef = {
     messageId,
     ...(current?.handle ? { handle: current.handle } : {}),
+    ...(current?.originalCard ? { originalCard: current.originalCard } : {}),
+    ...(current?.preserveBody ? { preserveBody: true } : {}),
     status: "resolved",
     createdAt: current?.createdAt ?? Date.now(),
     selectedLabel,
@@ -1909,6 +2008,58 @@ function renderLarkChoiceSubmittedCard(label: string, locale: Locale): Record<st
   };
 }
 
+function disableLarkChoiceCallbacks(value: unknown): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) disableLarkChoiceCallbacks(entry);
+    return;
+  }
+  const record = payloadObject(value);
+  if (!record) return;
+
+  let disabledChoice = false;
+  const directValue = payloadObject(record.value);
+  if (directValue?.cctb_lark === "choice") {
+    delete record.value;
+    disabledChoice = true;
+  }
+  if (Array.isArray(record.behaviors)) {
+    const retained = record.behaviors.filter((behavior) => {
+      const behaviorRecord = payloadObject(behavior);
+      const behaviorValue = payloadObject(behaviorRecord?.value);
+      const isChoice = behaviorRecord?.type === "callback" && behaviorValue?.cctb_lark === "choice";
+      disabledChoice ||= isChoice;
+      return !isChoice;
+    });
+    if (retained.length > 0) record.behaviors = retained;
+    else delete record.behaviors;
+  }
+  if (disabledChoice) record.disabled = true;
+
+  for (const child of Object.values(record)) disableLarkChoiceCallbacks(child);
+}
+
+function renderPreservedLarkChoiceSubmittedCard(
+  ref: LarkChoiceCardRef,
+  label: string,
+  locale: Locale,
+): Record<string, unknown> | undefined {
+  if (!ref.preserveBody || !ref.originalCard) return undefined;
+  const card = structuredClone(ref.originalCard);
+  disableLarkChoiceCallbacks(card);
+  const body = payloadObject(card.body);
+  if (!body || !Array.isArray(body.elements)) return undefined;
+  body.elements.push({
+    tag: "markdown",
+    content: locale === "en"
+      ? `✅ Selected: **${label}**. The task will continue; no need to click again.`
+      : `✅ 已选择：**${label}**。任务将继续，无需重复点击。`,
+  });
+  const config = payloadObject(card.config) ?? {};
+  config.update_multi = true;
+  card.config = config;
+  return card;
+}
+
 function settleLarkChoiceCard(input: {
   channel: LarkChannelLike;
   chatId: string;
@@ -1917,7 +2068,8 @@ function settleLarkChoiceCard(input: {
   label: string;
   ref: LarkChoiceCardRef;
 }): void {
-  const submittedCard = renderLarkChoiceSubmittedCard(input.label, input.locale);
+  const submittedCard = renderPreservedLarkChoiceSubmittedCard(input.ref, input.label, input.locale)
+    ?? renderLarkChoiceSubmittedCard(input.label, input.locale);
   const postSummaryFallback = async (): Promise<void> => {
     await sendLarkCardWithFallback({
       channel: input.channel,
@@ -2007,40 +2159,46 @@ async function runLarkCardChoice(input: {
   bridgeChatType: "private" | "group";
   userId: number;
   text: string;
+  locale: Locale;
 }): Promise<void> {
-  const abortController = new AbortController();
-  const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(input.replyTo));
-  const bridgeChatId = stableLarkNumericId(input.conversationKey);
-  const locale = await resolveLarkLocale(input.stateDir);
-  const cfg = await loadInstanceConfig(input.stateDir);
-  // Card-driven turns must see the CONVERSATION's resumed workspace, not the
-  // raw instance config — see applyConversationResumeScope.
-  await applyConversationResumeScope(input.stateDir, input.conversationKey, cfg);
-  const workspaceOverride = resolveInstanceWorkspacePath(cfg);
-  // Enforce the spend budget before running the engine (parity with the
-  // message-turn and bus entry points).
-  const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
-  if (budgetExhausted) {
-    await input.channel.send(input.chatId, { text: budgetExhausted.message }, larkReplyOptions(input.replyTo, input.replyInThread));
-    await appendLarkCardActionTurnEvent(input, {
-      type: "turn.completed",
-      action: "choice",
-      outcome: "noop",
-      detail: "budget exhausted",
-    });
-    return;
-  }
-  await mkdir(requestOutputDir, { recursive: true });
-  // A live NON-goal run would be orphaned by overwriting (where /stop can't
-  // reach it) — abort it before claiming. A pursued /goal is NOT aborted:
-  // claimLarkRunSlot attaches this turn to the pursuit so the goal survives a
-  // card-triggered turn, same as ordinary messages and crons.
-  const activeBeforeClaim = input.runtime.activeRuns.get(input.conversationKey);
-  if (activeBeforeClaim && !activeBeforeClaim.goalWatch) {
-    activeBeforeClaim.abortController.abort();
-  }
-  const releaseRunSlot = claimLarkRunSlot(input.runtime, input.conversationKey, { abortController, startedAt: Date.now() });
+  let releaseRunSlot: (() => void) | undefined;
   try {
+    const abortController = new AbortController();
+    const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(input.replyTo));
+    const bridgeChatId = stableLarkNumericId(input.conversationKey);
+    const locale = input.locale;
+    const cfg = await loadInstanceConfig(input.stateDir);
+    // Card-driven turns must see the CONVERSATION's resumed workspace, not the
+    // raw instance config — see applyConversationResumeScope.
+    await applyConversationResumeScope(input.stateDir, input.conversationKey, cfg);
+    const workspaceOverride = resolveInstanceWorkspacePath(cfg);
+    // Enforce the spend budget before running the engine (parity with the
+    // message-turn and bus entry points).
+    const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
+    if (budgetExhausted) {
+      await appendLarkCardActionTurnEvent(input, {
+        type: "turn.completed",
+        action: "choice",
+        outcome: "noop",
+        detail: "budget exhausted",
+      });
+      await input.channel.send(
+        input.chatId,
+        { text: budgetExhausted.message },
+        larkReplyOptions(input.replyTo, input.replyInThread),
+      ).catch(() => undefined);
+      return;
+    }
+    await mkdir(requestOutputDir, { recursive: true });
+    // A live NON-goal run would be orphaned by overwriting (where /stop can't
+    // reach it) — abort it before claiming. A pursued /goal is NOT aborted:
+    // claimLarkRunSlot attaches this turn to the pursuit so the goal survives a
+    // card-triggered turn, same as ordinary messages and crons.
+    const activeBeforeClaim = input.runtime.activeRuns.get(input.conversationKey);
+    if (activeBeforeClaim && !activeBeforeClaim.goalWatch) {
+      activeBeforeClaim.abortController.abort();
+    }
+    releaseRunSlot = claimLarkRunSlot(input.runtime, input.conversationKey, { abortController, startedAt: Date.now() });
     await appendLarkCardActionTurnEvent(input, {
       type: "turn.started",
       action: "choice",
@@ -2145,19 +2303,19 @@ async function runLarkCardChoice(input: {
       },
     });
   } catch (error) {
-    await input.channel.send(input.chatId, {
-      text: renderLarkUserFacingError(error, "engine", locale),
-    }, larkReplyOptions(input.replyTo, input.replyInThread));
     await appendLarkCardActionTurnEvent(input, {
       type: "turn.completed",
       action: "choice",
       outcome: "error",
       detail: redactLarkErrorDetail(error),
     });
+    await input.channel.send(input.chatId, {
+      text: renderLarkUserFacingError(error, "engine", input.locale),
+    }, larkReplyOptions(input.replyTo, input.replyInThread)).catch(() => undefined);
   } finally {
     // Release the slot only if a newer run (e.g. a /goal watcher started while
     // this turn was finishing) hasn't already replaced it.
-    releaseRunSlot();
+    releaseRunSlot?.();
   }
 }
 
@@ -2174,52 +2332,85 @@ async function runLarkArchiveContinueCardAction(input: {
   bridgeChatType: "private" | "group";
   uploadId: string;
   userId: number;
+  locale: Locale;
 }): Promise<void> {
-  const bridgeChatId = stableLarkNumericId(input.conversationKey);
-  const workflowResult = await prepareArchiveContinueWorkflow({
-    stateDir: input.stateDir,
-    chatId: bridgeChatId,
-    text: `/continue --upload ${input.uploadId}`,
-  });
-  if (!workflowResult) {
-    await sendLarkMarkdown(input.channel, input.chatId, "没有等待继续分析的压缩包。", larkReplyOptions(input.replyTo, input.replyInThread));
-    return;
-  }
-  if (workflowResult.kind === "reply") {
-    await sendLarkMarkdown(input.channel, input.chatId, workflowResult.text, larkReplyOptions(input.replyTo, input.replyInThread));
-    return;
-  }
-
-  const abortController = new AbortController();
-  const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(input.replyTo));
-  const locale = await resolveLarkLocale(input.stateDir);
-  const cfg = await loadInstanceConfig(input.stateDir);
-  // Card-driven turns must see the CONVERSATION's resumed workspace, not the
-  // raw instance config — see applyConversationResumeScope.
-  await applyConversationResumeScope(input.stateDir, input.conversationKey, cfg);
-  const workspaceOverride = resolveInstanceWorkspacePath(cfg);
-  // Enforce the spend budget before running the engine (parity with the
-  // message-turn and bus entry points).
-  const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
-  if (budgetExhausted) {
-    await input.channel.send(input.chatId, { text: budgetExhausted.message }, larkReplyOptions(input.replyTo, input.replyInThread));
-    await appendLarkCardActionTurnEvent(input, {
-      type: "turn.completed",
-      action: "continue_archive",
-      outcome: "noop",
-      detail: "budget exhausted",
-    });
-    return;
-  }
-  await mkdir(requestOutputDir, { recursive: true });
-  // Same active-run protection as runLarkCardChoice: abort a live non-goal
-  // holder (never orphan it), attach to a pursued /goal instead of killing it.
-  const activeBeforeClaim = input.runtime.activeRuns.get(input.conversationKey);
-  if (activeBeforeClaim && !activeBeforeClaim.goalWatch) {
-    activeBeforeClaim.abortController.abort();
-  }
-  const releaseRunSlot = claimLarkRunSlot(input.runtime, input.conversationKey, { abortController, startedAt: Date.now() });
+  let releaseRunSlot: (() => void) | undefined;
+  let workflowRecordId: string | undefined;
   try {
+    const bridgeChatId = stableLarkNumericId(input.conversationKey);
+    const workflowResult = await prepareArchiveContinueWorkflow({
+      stateDir: input.stateDir,
+      chatId: bridgeChatId,
+      text: `/continue --upload ${input.uploadId}`,
+    });
+    if (!workflowResult) {
+      await appendLarkCardActionTurnEvent(input, {
+        type: "turn.completed",
+        action: "continue_archive",
+        outcome: "noop",
+        detail: "archive no longer awaiting continuation",
+        metadata: { uploadId: input.uploadId },
+      });
+      await sendLarkMarkdown(
+        input.channel,
+        input.chatId,
+        input.locale === "en" ? "This archive is no longer awaiting continuation." : "这个压缩包已不在等待继续分析。",
+        larkReplyOptions(input.replyTo, input.replyInThread),
+      ).catch(() => undefined);
+      return;
+    }
+    if (workflowResult.kind === "reply") {
+      await appendLarkCardActionTurnEvent(input, {
+        type: "turn.completed",
+        action: "continue_archive",
+        outcome: "noop",
+        detail: "archive continuation returned without engine turn",
+        metadata: { uploadId: input.uploadId },
+      });
+      await sendLarkMarkdown(
+        input.channel,
+        input.chatId,
+        workflowResult.text,
+        larkReplyOptions(input.replyTo, input.replyInThread),
+      ).catch(() => undefined);
+      return;
+    }
+
+    workflowRecordId = workflowResult.workflowRecordId;
+    const abortController = new AbortController();
+    const requestOutputDir = path.join(input.stateDir, "workspace", ".lark-out", safeSegment(input.replyTo));
+    const locale = input.locale;
+    const cfg = await loadInstanceConfig(input.stateDir);
+    // Card-driven turns must see the CONVERSATION's resumed workspace, not the
+    // raw instance config — see applyConversationResumeScope.
+    await applyConversationResumeScope(input.stateDir, input.conversationKey, cfg);
+    const workspaceOverride = resolveInstanceWorkspacePath(cfg);
+    // Enforce the spend budget before running the engine (parity with the
+    // message-turn and bus entry points).
+    const budgetExhausted = await checkBudgetAvailability(input.stateDir, cfg.budgetUsd, locale);
+    if (budgetExhausted) {
+      await appendLarkCardActionTurnEvent(input, {
+        type: "turn.completed",
+        action: "continue_archive",
+        outcome: "noop",
+        detail: "budget exhausted",
+        metadata: { uploadId: input.uploadId, workflowRecordId },
+      });
+      await input.channel.send(
+        input.chatId,
+        { text: budgetExhausted.message },
+        larkReplyOptions(input.replyTo, input.replyInThread),
+      ).catch(() => undefined);
+      return;
+    }
+    await mkdir(requestOutputDir, { recursive: true });
+    // Same active-run protection as runLarkCardChoice: abort a live non-goal
+    // holder (never orphan it), attach to a pursued /goal instead of killing it.
+    const activeBeforeClaim = input.runtime.activeRuns.get(input.conversationKey);
+    if (activeBeforeClaim && !activeBeforeClaim.goalWatch) {
+      activeBeforeClaim.abortController.abort();
+    }
+    releaseRunSlot = claimLarkRunSlot(input.runtime, input.conversationKey, { abortController, startedAt: Date.now() });
     await appendLarkCardActionTurnEvent(input, {
       type: "turn.started",
       action: "continue_archive",
@@ -2341,9 +2532,6 @@ async function runLarkArchiveContinueCardAction(input: {
       });
     }
   } catch (error) {
-    await input.channel.send(input.chatId, {
-      text: renderLarkUserFacingError(error, "engine", locale),
-    }, larkReplyOptions(input.replyTo, input.replyInThread));
     await appendLarkCardActionTurnEvent(input, {
       type: "turn.completed",
       action: "continue_archive",
@@ -2351,13 +2539,41 @@ async function runLarkArchiveContinueCardAction(input: {
       detail: redactLarkErrorDetail(error),
       metadata: {
         uploadId: input.uploadId,
-        workflowRecordId: workflowResult.workflowRecordId,
+        workflowRecordId,
       },
     });
+    await input.channel.send(input.chatId, {
+      text: renderLarkUserFacingError(error, "engine", input.locale),
+    }, larkReplyOptions(input.replyTo, input.replyInThread)).catch(() => undefined);
   } finally {
     // Release the slot only if a newer run hasn't already replaced it.
-    releaseRunSlot();
+    releaseRunSlot?.();
   }
+}
+
+async function reportQueuedLarkCardActionFailure(input: {
+  channel: LarkChannelLike;
+  stateDir: string;
+  chatId: string;
+  replyTo: string;
+  replyInThread?: boolean;
+  conversationKey: string;
+  bridgeChatType: "private" | "group";
+  userId: number;
+  action: "choice" | "continue_archive";
+  locale: Locale;
+  error: unknown;
+}): Promise<void> {
+  await appendLarkCardActionTurnEvent(input, {
+    type: "turn.completed",
+    action: input.action,
+    outcome: "error",
+    detail: redactLarkErrorDetail(input.error),
+    metadata: { phase: "queue" },
+  });
+  await input.channel.send(input.chatId, {
+    text: renderLarkUserFacingError(input.error, "engine", input.locale),
+  }, larkReplyOptions(input.replyTo, input.replyInThread)).catch(() => undefined);
 }
 
 async function appendLarkCardActionEngineEvent(

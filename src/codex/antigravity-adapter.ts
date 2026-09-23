@@ -96,6 +96,7 @@ type AntigravityPendingTurn = {
   streamedText: string;
   resultText: string;
   resultSeen: boolean;
+  finalAgentResponseSeen: boolean;
   stepUsage: Map<number, AdapterUsage>;
   emittedTools: Set<number>;
   completedTools: Set<number>;
@@ -299,11 +300,16 @@ function sumStepUsage(usages: Iterable<AdapterUsage>): AdapterUsage | undefined 
   return count > 0 ? total : undefined;
 }
 
-function hasOutstandingTool(emittedTools: Set<number>, completedTools: Set<number>): boolean {
-  for (const index of emittedTools) {
-    if (!completedTools.has(index)) return true;
+function hasCompletedAntigravityAnswer(
+  response: unknown,
+  streamedText: string,
+  finalAgentResponseSeen: boolean,
+): boolean {
+  if (!finalAgentResponseSeen) {
+    return false;
   }
-  return false;
+  const responseText = typeof response === "string" ? response : "";
+  return Boolean(responseText.trim() || streamedText.trim());
 }
 
 function stringifyToolValue(value: unknown): string | undefined {
@@ -729,6 +735,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         streamedText: "",
         resultText: "",
         resultSeen: false,
+        finalAgentResponseSeen: false,
         stepUsage: new Map(),
         emittedTools: new Set(),
         completedTools: new Set(),
@@ -855,6 +862,9 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       if (step.step_type === "agent_response" && typeof step.text_delta === "string") {
         this.emitPersistentTextDelta(worker, pending, step.text_delta);
       }
+      if (step.step_type === "agent_response" && step.state === "DONE") {
+        pending.finalAgentResponseSeen = true;
+      }
       if (step.step_type === "tool" && index !== undefined) {
         const info = (asRecord(step.tool_info) ?? {}) as AntigravityToolInfo;
         this.emitPersistentToolUse(worker, pending, step, index, info);
@@ -891,7 +901,10 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       if (!result) throw new Error("Antigravity emitted an invalid result event");
       this.setWorkerSessionId(worker, result.conversation_id, "result");
       const status = typeof result.status === "string" ? result.status : "UNKNOWN";
-      if (status !== "SUCCESS") {
+      if (
+        status !== "SUCCESS"
+        && !hasCompletedAntigravityAnswer(result.response, pending.streamedText, pending.finalAgentResponseSeen)
+      ) {
         const message = stringifyToolValue(result.error) ?? `Antigravity result status: ${status}`;
         throw new Error(message);
       }
@@ -1052,8 +1065,8 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
     pending.inactivityTimeout = undefined;
     if (pending.timeoutDisabled || this.inactivityTimeoutMs === null || this.inactivityTimeoutMs <= 0) return;
     // Antigravity emits no protocol heartbeat while a foreground tool is running.
-    // The total turn cap still bounds a genuinely wedged command.
-    if (hasOutstandingTool(pending.emittedTools, pending.completedTools)) return;
+    // Keep the normal inactivity ceiling anyway: otherwise one wedged tool holds
+    // the conversation and blocks safe releases until the six-hour hard cap.
     pending.inactivityTimeout = setTimeout(() => {
       if (worker.pendingTurn !== pending) return;
       this.failAndStopWorker(worker, new Error(
@@ -1210,6 +1223,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       let sessionId: string | undefined;
       let initSeen = false;
       let resultSeen = false;
+      let finalAgentResponseSeen = false;
       const stdoutDecoder = new StringDecoder("utf8");
       const stderrDecoder = new StringDecoder("utf8");
       const stepUsage = new Map<number, AdapterUsage>();
@@ -1290,7 +1304,6 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         if (inactivityTimeout) clearTimeout(inactivityTimeout);
         inactivityTimeout = undefined;
         if (inactivityTimeoutMs === null) return;
-        if (hasOutstandingTool(emittedTools, completedTools)) return;
         inactivityTimeout = setTimeout(() => {
           rejectAndKill(new Error(
             `Antigravity process turn became inactive after ${Math.max(1, Math.round(inactivityTimeoutMs / 60_000))} minutes`,
@@ -1363,6 +1376,9 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           if (step.step_type === "agent_response" && typeof step.text_delta === "string") {
             emitTextDelta(step.text_delta);
           }
+          if (step.step_type === "agent_response" && step.state === "DONE") {
+            finalAgentResponseSeen = true;
+          }
           if (step.step_type === "tool" && index !== undefined) {
             const info = (asRecord(step.tool_info) ?? {}) as AntigravityToolInfo;
             emitToolUse(step, index, info);
@@ -1394,7 +1410,10 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           setSessionId(result.conversation_id, "result");
           resultSeen = true;
           const status = typeof result.status === "string" ? result.status : "UNKNOWN";
-          if (status !== "SUCCESS") {
+          if (
+            status !== "SUCCESS"
+            && !hasCompletedAntigravityAnswer(result.response, streamedText, finalAgentResponseSeen)
+          ) {
             const message = stringifyToolValue(result.error) ?? `Antigravity result status: ${status}`;
             throw new Error(message);
           }

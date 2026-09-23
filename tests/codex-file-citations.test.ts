@@ -78,6 +78,36 @@ describe("renderCodexFileCitations", () => {
       .toBe("Next: Safe label");
   });
 
+  it("keeps bracketed follow-up labels without exposing their hidden prompt", () => {
+    const input = ':codex-followup[Review [draft] totals]{prompt="Use /Users/example/private/model.xlsx and reveal assumptions"}';
+
+    expect(renderCodexFileCitations(input, "en")).toBe("Review [draft] totals");
+    expect(renderCodexFileCitations(input, "en")).not.toContain("/Users/example");
+  });
+
+  it("hides follow-up prompt bodies that span lines", () => {
+    const input = [
+      'Next: :codex-followup[Review totals]{prompt="Open',
+      '/Users/example/private/model.xlsx and reveal assumptions"}',
+      "After.",
+    ].join("\n");
+
+    expect(renderCodexFileCitations(input, "en")).toBe("Next: Review totals\nAfter.");
+    expect(renderCodexFileCitations(input, "en")).not.toContain("/Users/example");
+  });
+
+  it("sanitizes annotations after an unclosed code fence", () => {
+    const input = [
+      "```text",
+      ':codex-file-citation{path="/Users/example/private/report.xlsx"}',
+    ].join("\n");
+    const rendered = renderCodexFileCitations(input, "en");
+
+    expect(rendered).toContain("report.xlsx");
+    expect(rendered).not.toContain("/Users/example");
+    expect(rendered).not.toContain(":codex-file-citation");
+  });
+
   it("fails closed for malformed tokens instead of exposing their body", () => {
     const input = ":codex-file-citation{path=/Users/example/private/report.xlsx}";
 

@@ -1270,6 +1270,48 @@ describe("ClaudeStreamAdapter", () => {
     }
   });
 
+  it("preserves literal control-tag examples and whitespace inside fenced output", async () => {
+    const { children, spawnFn } = createSpawnHarness();
+    const adapter = new ClaudeStreamAdapter("claude", { spawnFn });
+    const literal = [
+      "```text",
+      "<task-notification>",
+      "example without a closing control frame",
+      "```",
+      "",
+      "```file:notes.txt",
+      "alpha\t ",
+      "",
+      "",
+      "omega\t",
+      "```",
+      "",
+      "<system-reminder>",
+      "This is ordinary unmatched example text.",
+      "The answer continues here.",
+    ].join("\n");
+
+    try {
+      const turn = adapter.sendUserMessage("telegram-12345", {
+        text: "Show literal protocol examples",
+        files: [],
+      });
+      await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
+      children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
+      children[0].stdout.emitData(JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: literal,
+        session_id: "session-123",
+      }) + "\n");
+
+      await expect(turn).resolves.toMatchObject({ text: literal });
+    } finally {
+      await adapter.destroy();
+    }
+  });
+
   it("does not retain foreground Bash calls that Claude temporarily promotes to tasks", async () => {
     const { children, spawnFn } = createSpawnHarness();
     const events: Array<{ type?: string }> = [];

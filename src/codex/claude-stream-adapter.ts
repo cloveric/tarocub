@@ -286,24 +286,85 @@ function appendAssistantText(existing: string, next: string): string {
   return existing ? `${existing}\n${next}` : next;
 }
 
-/**
- * Claude task-review turns can occasionally echo their synthetic user frame
- * into assistant text. Those frames contain internal reminders, task ids, and
- * temporary paths that must never cross the user-visible delivery boundary.
- */
-function sanitizeClaudeUserVisibleText(text: string): string {
+type ClaudeMarkdownFence = { marker: "`" | "~"; length: number };
+
+function claudeFenceLine(line: string): { marker: "`" | "~"; length: number; trailing: string } | undefined {
+  const match = /^(?:[\t ]{0,3}>[\t ]?)*[\t ]{0,3}(`{3,}|~{3,})(.*)$/u.exec(line.replace(/\r?\n$/u, ""));
+  if (!match) return undefined;
+  return {
+    marker: match[1]![0] as "`" | "~",
+    length: match[1]!.length,
+    trailing: match[2] ?? "",
+  };
+}
+
+function stripClaudeControlFrames(text: string): string {
   return text
     .replace(
-      /(?:^|\n)[\t ]*(?:user|assistant)?[\t ]*<system-reminder>[\s\S]*?(?:<\/system-reminder>|$)/gi,
-      "\n",
+      /(^|\r?\n)[\t ]*(?:user|assistant)?[\t ]*<system-reminder>[\s\S]*?<\/system-reminder>[\t ]*(?=\r?\n|$)/giu,
+      "$1",
     )
     .replace(
-      /(?:^|\n)[\t ]*<task-notification>[\s\S]*?(?:<\/task-notification>|$)/gi,
-      "\n",
+      /(^|\r?\n)[\t ]*<task-notification>[\s\S]*?<\/task-notification>[\t ]*(?=\r?\n|$)/giu,
+      "$1",
     )
-    .replace(/[\t ]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    // Older Claude builds emitted this distinctive internal frame without a
+    // closing system-reminder tag. Keep blocking that known leak, but do not
+    // delete arbitrary user prose merely because it contains an unmatched tag.
+    .replace(
+      /(^|\r?\n)[\t ]*(?:user|assistant)?[\t ]*<system-reminder>[\t ]*\r?\n[\t ]*\[SYSTEM NOTIFICATION - NOT USER INPUT\][\s\S]*$/giu,
+      "$1",
+    );
+}
+
+/**
+ * Claude task-review turns can occasionally echo their synthetic user frame
+ * into assistant text. Strip only complete control frames outside Markdown
+ * fences; ordinary whitespace and literal examples must remain byte-for-byte.
+ */
+function sanitizeClaudeUserVisibleText(text: string): string {
+  const lines = text.match(/[^\r\n]*(?:\r\n|\n|\r|$)/gu) ?? [];
+  if (lines.at(-1) === "") lines.pop();
+  let output = "";
+  let prose = "";
+  let fenced = "";
+  let fence: ClaudeMarkdownFence | undefined;
+
+  const flushProse = () => {
+    output += stripClaudeControlFrames(prose);
+    prose = "";
+  };
+
+  for (const line of lines) {
+    const parsedFence = claudeFenceLine(line);
+    if (fence) {
+      fenced += line;
+      if (
+        parsedFence
+        && parsedFence.marker === fence.marker
+        && parsedFence.length >= fence.length
+        && !parsedFence.trailing.trim()
+      ) {
+        output += fenced;
+        fenced = "";
+        fence = undefined;
+      }
+      continue;
+    }
+    if (parsedFence) {
+      flushProse();
+      fence = { marker: parsedFence.marker, length: parsedFence.length };
+      fenced = line;
+      continue;
+    }
+    prose += line;
+  }
+
+  flushProse();
+  // An unclosed code fence is still literal user-visible content. Never run the
+  // control-frame scrubber through it just because the Markdown is incomplete.
+  output += fenced;
+  return output.trim();
 }
 
 function readClaudeMcpServerWarnings(value: unknown): string[] {

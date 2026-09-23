@@ -20,7 +20,7 @@ describe("larkAgentInstructions", () => {
     resetCloudAsrConfiguredCacheForTests();
     try {
       const instructions = larkAgentInstructions();
-      expect(instructions.length).toBeLessThan(3000);
+      expect(instructions.length).toBeLessThan(2900);
       expect(instructions.split("\n").length).toBeLessThanOrEqual(14);
     } finally {
       if (previousUrl === undefined) delete process.env.ASR_HTTP_URL; else process.env.ASR_HTTP_URL = previousUrl;

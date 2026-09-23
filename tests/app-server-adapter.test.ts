@@ -1951,6 +1951,26 @@ describe("CodexAppServerAdapter", () => {
     await expect(promise).rejects.toThrow("unexpected status 401 Unauthorized");
   });
 
+  it("preserves the structured Codex error code on failed turns", async () => {
+    const { child, spawnFn } = createSpawnHarness();
+    const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);
+
+    const promise = adapter.sendUserMessage("telegram-12345", {
+      text: "Hello",
+      files: [],
+    });
+
+    await waitFor(() => child.stdin.lines.length >= 1);
+    child.stdout.emitData('{"id":1,"result":{"platformOs":"windows"}}\n');
+    await waitFor(() => child.stdin.lines.length >= 2);
+    child.stdout.emitData('{"id":2,"result":{"thread":{"id":"thread-123"}}}\n');
+    await waitFor(() => child.stdin.lines.length >= 3);
+
+    child.stdout.emitData('{"method":"turn/completed","params":{"threadId":"thread-123","turn":{"id":"turn-1","items":[],"status":"failed","error":{"message":"Quota exceeded.","codexErrorInfo":"usageLimitExceeded","additionalDetails":null}}}}\n');
+
+    await expect(promise).rejects.toThrow("Quota exceeded.\nCodex error code: usageLimitExceeded");
+  });
+
   it("does not let a recovered transport error override a completed turn", async () => {
     const { child, spawnFn } = createSpawnHarness();
     const adapter = new CodexAppServerAdapter("codex", process.cwd(), spawnFn);

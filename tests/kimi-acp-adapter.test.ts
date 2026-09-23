@@ -5935,6 +5935,8 @@ describe("KimiAcpAdapter", () => {
                 header: "Traits",
                 multi_select: true,
                 required: true,
+                min_selections: 1,
+                max_selections: 2,
                 options: [
                   { label: "Fast" },
                   { label: "Safe, stable" },
@@ -5990,6 +5992,7 @@ describe("KimiAcpAdapter", () => {
             type: "array",
             title: "Traits",
             minItems: 1,
+            maxItems: 2,
             items: {
               anyOf: [
                 { const: "fast-id", title: "Fast" },
@@ -6028,7 +6031,12 @@ describe("KimiAcpAdapter", () => {
         expect(request.toolInput).toMatchObject({
           questions: [
             expect.objectContaining({ question: "Choose a colour", required: true }),
-            expect.objectContaining({ question: "Optional traits", required: false, multi_select: true }),
+            expect.objectContaining({
+              question: "Optional traits",
+              required: false,
+              multi_select: true,
+              min_selections: 1,
+            }),
           ],
         });
         return {

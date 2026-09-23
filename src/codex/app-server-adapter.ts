@@ -1596,17 +1596,20 @@ export class CodexAppServerAdapter implements CodexAdapter {
   }
 
   private readErrorMessage(value: unknown): string | null {
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "message" in value &&
-      typeof (value as { message?: unknown }).message === "string"
-    ) {
-      const message = (value as { message: string }).message.trim();
-      return message || null;
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return null;
     }
 
-    return null;
+    const error = value as { message?: unknown; codexErrorInfo?: unknown };
+    const message = typeof error.message === "string" ? error.message.trim() : "";
+    const errorInfo = typeof error.codexErrorInfo === "string"
+      ? error.codexErrorInfo.trim()
+      : error.codexErrorInfo && typeof error.codexErrorInfo === "object"
+        ? Object.keys(error.codexErrorInfo as Record<string, unknown>)[0] ?? ""
+        : "";
+    const structuredCode = errorInfo ? `Codex error code: ${errorInfo}` : "";
+    const combined = [message, structuredCode].filter(Boolean).join("\n");
+    return combined || null;
   }
 
   private readTurnErrorMessage(value: unknown): string | null {
