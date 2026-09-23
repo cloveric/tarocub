@@ -1,4 +1,4 @@
-import type { FailureCategory } from "../runtime/error-classification.js";
+import { extractQuotaResetHint, type FailureCategory } from "../runtime/error-classification.js";
 
 export type Locale = "en" | "zh";
 export type EngineName = "codex" | "claude" | "antigravity" | "kimi" | "deepseek";
@@ -535,6 +535,7 @@ export function renderCategorizedErrorMessage(
   const timeoutMatch = detail.match(/turn (timed out|became inactive) after\s+(\d+(?:\.\d+)?)\s*minute/i);
   const timeoutMinutes = timeoutMatch?.[2];
   const isInactivityTimeout = timeoutMatch?.[1]?.toLowerCase() === "became inactive";
+  const quotaResetHint = category === "engine-quota" ? extractQuotaResetHint(detail) : undefined;
 
   if (locale === "zh") {
     if (category === "write-permission") {
@@ -563,9 +564,10 @@ export function renderCategorizedErrorMessage(
       return "错误：模型服务当前触发限流。请稍等后重试；重置聊天或重启实例都无效。";
     }
     if (category === "engine-quota") {
-      return engine === "kimi"
+      const message = engine === "kimi"
         ? "错误：Kimi 当前 5 小时使用额度已用完。请等待额度窗口重置，或购买额外额度/升级套餐；重新登录或重启都无效。"
         : "错误：引擎使用额度已用完。请等待额度窗口重置或提高账户额度；重新登录或重启都无效。";
+      return quotaResetHint ? `${message} 重置信息：${quotaResetHint}。` : message;
     }
     if (category === "engine-timeout") {
       const duration = timeoutMinutes ? `${timeoutMinutes} 分钟` : "配置的时限";
@@ -626,9 +628,10 @@ export function renderCategorizedErrorMessage(
     return "Error: The model service is rate-limiting requests. Wait briefly and retry; resetting the chat or restarting the instance will not help.";
   }
   if (category === "engine-quota") {
-    return engine === "kimi"
+    const message = engine === "kimi"
       ? "Error: Kimi's current 5-hour usage quota is exhausted. Wait for the usage window to reset, or purchase extra usage/upgrade; signing in again or restarting will not help."
       : "Error: The engine usage quota is exhausted. Wait for the quota window to reset or increase the account quota; signing in again or restarting will not help.";
+    return quotaResetHint ? `${message} Reset information: ${quotaResetHint}.` : message;
   }
   if (category === "engine-timeout") {
     const duration = timeoutMinutes ? `${timeoutMinutes}-minute` : "configured";

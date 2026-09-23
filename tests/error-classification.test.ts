@@ -48,10 +48,27 @@ describe("classifyFailure auth detection", () => {
     expect(en).toContain("signing in again or restarting will not help");
   });
 
-  it("classifies current Codex usage-limit messages and structured codes as quota", () => {
+  it("classifies current Codex and Claude usage-limit messages as quota", () => {
     expect(classifyFailure(new Error("You've hit your usage limit"))).toBe("engine-quota");
     expect(classifyFailure(new Error("Quota exceeded"))).toBe("engine-quota");
     expect(classifyFailure(new Error("Codex error code: usageLimitExceeded"))).toBe("engine-quota");
+    for (const message of [
+      "You've hit your limit",
+      "You've hit your fast limit",
+      "You've hit your monthly spend limit",
+      "Usage limit reached",
+      "spend limit reached (team plan)",
+    ]) {
+      expect(classifyFailure(new Error(message))).toBe("engine-quota");
+    }
+  });
+
+  it("preserves an available Claude quota reset hint in channel messages", () => {
+    const error = new Error("You've hit your fast limit. Your limit resets in 2 hours.");
+
+    expect(renderLarkUserFacingError(error, "engine", "zh")).toContain("resets in 2 hours");
+    expect(renderCategorizedErrorMessage("engine-quota", error.message, "en", "claude"))
+      .toContain("resets in 2 hours");
   });
 
   it("renders the Antigravity startup auth failure instead of restart advice", () => {
@@ -131,13 +148,21 @@ describe("classifyFailure specificity", () => {
     expect(classifyFailure(new Error("API Error: 429 Too Many Requests"))).toBe("engine-rate-limit");
     expect(classifyFailure(new Error("api_error_status=429 rate limited"))).toBe("engine-rate-limit");
     expect(classifyFailure(new Error("Codex HTTP status 429"))).toBe("engine-rate-limit");
+    expect(classifyFailure(new Error("DeepSeek Harness agent failed: code=rate_limit_exceeded"))).toBe("engine-rate-limit");
     expect(classifyFailure(new Error("Telegram API request failed: 429 Too Many Requests"))).toBe("telegram-delivery");
+    expect(classifyFailure(new Error("Lark API error: rate_limit_exceeded"))).not.toBe("engine-rate-limit");
     expect(getBusErrorSemantics("engine-rate-limit")).toEqual({ code: "engine_rate_limit", retryable: true });
 
     const error = new Error("API Error: 429 Too Many Requests");
     expect(renderLarkUserFacingError(error, "engine", "zh")).toContain("模型服务当前触发限流");
     expect(renderLarkUserFacingError(error, "engine", "zh")).toContain("重启实例都无效");
     expect(renderCategorizedErrorMessage("engine-rate-limit", error.message, "en")).toContain("rate-limiting");
+  });
+
+  it("classifies DeepSeek exhausted-balance responses as quota failures", () => {
+    expect(classifyFailure(new Error("DeepSeek Harness agent failed: HTTP 402 Payment Required"))).toBe("engine-quota");
+    expect(classifyFailure(new Error("DeepSeek Harness agent failed: insufficient_balance"))).toBe("engine-quota");
+    expect(getBusErrorSemantics("engine-quota")).toEqual({ code: "engine_quota", retryable: false });
   });
 
   it("renders model-capacity failures with actionable retry guidance", () => {

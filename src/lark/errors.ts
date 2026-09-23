@@ -1,4 +1,4 @@
-import { classifyFailure } from "../runtime/error-classification.js";
+import { classifyFailure, extractQuotaResetHint } from "../runtime/error-classification.js";
 import { formatLarkFileSize, isLarkAttachmentTooLargeError } from "./files.js";
 import type { Locale } from "../telegram/message-renderer.js";
 
@@ -41,6 +41,7 @@ export function renderLarkUserFacingError(
   const errorText = error instanceof Error ? `${error.name}\n${error.message}` : String(error);
   const isAntigravityAuth = category === "auth" && /(?:antigravity|\bagy\b)/i.test(errorText);
   const isKimiQuota = category === "engine-quota" && /(?:kimi|5-hour usage limit)/i.test(errorText);
+  const quotaResetHint = category === "engine-quota" ? extractQuotaResetHint(error) : undefined;
   const isModelCapacity =
     category === "engine-backend" &&
     /(?:selected model is at capacity|no capacity available for model)/i.test(errorText);
@@ -88,9 +89,10 @@ export function renderLarkUserFacingError(
       return "Error: the model service is rate-limiting requests. Wait briefly and retry; resetting the chat or restarting the instance will not help.";
     }
     if (category === "engine-quota") {
-      return isKimiQuota
+      const message = isKimiQuota
         ? "Error: Kimi's current 5-hour usage quota is exhausted. Wait for the usage window to reset, or purchase extra usage/upgrade; signing in again or restarting will not help."
         : "Error: the engine usage quota is exhausted. Wait for the quota window to reset or increase the account quota; signing in again or restarting will not help.";
+      return quotaResetHint ? `${message} Reset information: ${quotaResetHint}.` : message;
     }
     if (category === "engine-timeout") {
       const duration = timeoutMinutes ? `${timeoutMinutes} minutes` : "the configured interval";
@@ -139,9 +141,10 @@ export function renderLarkUserFacingError(
     return "错误：模型服务当前触发限流。请稍等后重试；重置聊天或重启实例都无效。";
   }
   if (category === "engine-quota") {
-    return isKimiQuota
+    const message = isKimiQuota
       ? "错误：Kimi 当前 5 小时使用额度已用完。请等待额度窗口重置，或购买额外额度/升级套餐；重新登录或重启都无效。"
       : "错误：引擎使用额度已用完。请等待额度窗口重置或提高账户额度；重新登录或重启都无效。";
+    return quotaResetHint ? `${message} 重置信息：${quotaResetHint}。` : message;
   }
   if (category === "engine-timeout") {
     const duration = timeoutMinutes ? `${timeoutMinutes} 分钟` : "配置的时限";

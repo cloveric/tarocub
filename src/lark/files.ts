@@ -113,6 +113,7 @@ export async function prepareLarkFileWorkflow(input: {
   stateDir: string;
   normalized: LarkNormalizedBridgeMessage;
   commandText: string;
+  locale?: Locale;
   downloadedAttachments: DownloadedLarkAttachment[];
 }): Promise<FileWorkflowResult | null> {
   if (input.downloadedAttachments.length === 1 && isDownloadedLarkArchive(input.downloadedAttachments[0]!)) {
@@ -130,6 +131,7 @@ export async function prepareLarkFileWorkflow(input: {
       stateDir: input.stateDir,
       chatId: input.normalized.bridgeChatId,
       text: input.commandText,
+      locale: input.locale,
     });
   }
 

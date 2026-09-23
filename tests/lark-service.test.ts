@@ -1343,6 +1343,7 @@ describe("lark service", () => {
       "稍后发的文件记得汇总",
       "我先发的那张截图和后面的有啥区别",
       "我发给你的文件打不开",
+      "我再发一遍文件你还是打不开吗",
     ];
 
     try {
@@ -14274,7 +14275,8 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       const sent = JSON.stringify(channel.send.mock.calls);
       expect(sent).toContain("已收到继续请求");
-      expect(sent).toMatch(/已不在等待继续分析|no longer waiting/);
+      expect(sent).toContain("已不在当前聊天中等待继续分析");
+      expect(sent).not.toContain("That archive is no longer waiting");
       expect(sent).not.toContain("已开始深入分析");
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({

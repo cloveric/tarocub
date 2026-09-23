@@ -485,11 +485,13 @@ export async function prepareArchiveContinueWorkflow(input: {
   stateDir: string;
   chatId: number;
   text: string;
+  locale?: "en" | "zh";
   replyContext?: {
     messageId: number;
     text: string;
   };
 }): Promise<FileWorkflowResult | null> {
+  const zh = input.locale === "zh";
   const { matches, extraInstructions, targetUploadId, malformedTarget, isSlashCommand } = isContinueAnalysisCommand(input.text);
   if (!matches) {
     return null;
@@ -498,7 +500,9 @@ export async function prepareArchiveContinueWorkflow(input: {
   if (malformedTarget) {
     return {
       kind: "reply",
-      text: 'Malformed continue command. Use /continue, the Continue Analysis button, or reply "继续分析" to the archive summary.',
+      text: zh
+        ? "继续分析命令格式不正确。请使用 /continue、点击“继续分析”，或回复压缩包摘要并输入“继续分析”。"
+        : 'Malformed continue command. Use /continue, the Continue Analysis button, or reply "继续分析" to the archive summary.',
     };
   }
 
@@ -521,14 +525,14 @@ export async function prepareArchiveContinueWorkflow(input: {
       if (targetedRecord?.status === "processing") {
         return {
           kind: "reply",
-          text: "That archive is already being processed in this chat.",
+          text: zh ? "这个压缩包正在当前聊天中继续分析。" : "That archive is already being processed in this chat.",
         };
       }
 
       if (targetedRecord?.status === "completed") {
         return {
           kind: "reply",
-          text: "That archive has already completed continued analysis in this chat.",
+          text: zh ? "这个压缩包已经在当前聊天中完成继续分析。" : "That archive has already completed continued analysis in this chat.",
         };
       }
     }
@@ -546,8 +550,8 @@ export async function prepareArchiveContinueWorkflow(input: {
     return {
       kind: "reply",
       text: explicitTarget
-        ? "That archive is no longer waiting for continued analysis in this chat."
-        : "There is no archive waiting for continued analysis in this chat.",
+        ? (zh ? "这个压缩包已不在当前聊天中等待继续分析。" : "That archive is no longer waiting for continued analysis in this chat.")
+        : (zh ? "当前聊天中没有等待继续分析的压缩包。" : "There is no archive waiting for continued analysis in this chat."),
     };
   }
 

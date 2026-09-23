@@ -2342,6 +2342,7 @@ async function runLarkArchiveContinueCardAction(input: {
       stateDir: input.stateDir,
       chatId: bridgeChatId,
       text: `/continue --upload ${input.uploadId}`,
+      locale: input.locale,
     });
     if (!workflowResult) {
       await appendLarkCardActionTurnEvent(input, {

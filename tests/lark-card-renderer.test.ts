@@ -909,6 +909,12 @@ describe("lark card renderer", () => {
     expect(cleanCardText("Fee $5 \\rightarrow $10")).toBe("Fee $5 → $10");
   });
 
+  it("normalizes TeX commands followed by subscripts and superscripts", () => {
+    expect(cleanCardText(
+      "Total $\\sum_{i=1}^n x_i$; area $\\int_0^1 x dx$; eigenvalue $\\lambda_1$",
+    )).toBe("Total ∑_(i=1)^n x_i; area ∫_0^1 x dx; eigenvalue λ_1");
+  });
+
   it("moves bold markers inside quotation marks so inline quotes render in Lark markdown", () => {
     expect(cleanCardText(
       "卖方主张**“上市公司先支付首期款”**，再办理工商过户。",

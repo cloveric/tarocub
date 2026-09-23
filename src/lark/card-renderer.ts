@@ -1532,7 +1532,7 @@ const LARK_INLINE_MATH_SYMBOLS: Readonly<Record<string, string>> = {
 };
 
 const LARK_INLINE_MATH_COMMAND_RE = new RegExp(
-  `\\\\(${Object.keys(LARK_INLINE_MATH_SYMBOLS).sort((left, right) => right.length - left.length).join("|")})\\b`,
+  `\\\\(${Object.keys(LARK_INLINE_MATH_SYMBOLS).sort((left, right) => right.length - left.length).join("|")})(?![A-Za-z])`,
   "g",
 );
 
@@ -1561,7 +1561,7 @@ function canNormalizeLarkMath(body: string, requireCommand = false): boolean {
   if (/[A-Za-z]:\\/.test(body)) {
     return false;
   }
-  const commands = [...body.matchAll(/\\([A-Za-z]+)\b/g)].map((match) => match[1]!);
+  const commands = [...body.matchAll(/\\([A-Za-z]+)(?![A-Za-z])/g)].map((match) => match[1]!);
   if (commands.some((command) => !LARK_SUPPORTED_MATH_COMMANDS.has(command))) {
     return false;
   }
@@ -1599,7 +1599,9 @@ function normalizeLarkMathBody(body: string): string {
     ))
     .replace(/\\[,;:!]\s*/g, " ")
     .replace(/\\([%#$&_{}])/g, "$1")
-    .replace(/([_^])\{([^{}]+)\}/g, "$1$2")
+    .replace(/([_^])\{([^{}]+)\}/g, (_match, marker: string, value: string) => (
+      value.length === 1 ? `${marker}${value}` : `${marker}(${value})`
+    ))
     .replace(/[{}]/g, "")
     .replace(/~/g, " ")
     .replace(/\s+/g, " ")

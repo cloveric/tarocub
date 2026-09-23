@@ -1094,6 +1094,12 @@ function announcesUpcomingLarkAttachment(text: string): boolean {
 
   const attachment = "(?:截图|图片?|照片|文件|附件|文档|表格|压缩包|视频|音频|录音)";
   const send = "(?:发(?!现|布|票|生|挥|明|起|热|言|的)|传|上传|补发|贴)";
+  const resendFailureQuestion = new RegExp(
+    `我(?:再|又).{0,8}${send}.{0,12}${attachment}.{0,12}(?:还是|又|也).{0,8}(?:打不开|看不到|收不到|读不到|识别不了)`,
+  );
+  if (resendFailureQuestion.test(normalized)) {
+    return false;
+  }
   const chineseTimedAnnouncement = new RegExp(
     `(?:马上|待会儿?|等会儿?|等下|稍后|随后|接着|下一(?:条|个)|下条|一会儿?|这就|我(?:会|准备|打算|马上|待会儿?|等会儿?|等下|稍后|随后|接着|先|再|这就)).{0,8}${send}.{0,16}${attachment}`,
   );
@@ -1766,6 +1772,7 @@ async function runNormalizedLarkMessage(
         stateDir: input.stateDir,
         normalized: { ...normalized, text: requestText },
         commandText,
+        locale,
         downloadedAttachments: workflowDownloads,
       });
       if (workflowResult?.workflowRecordId) {

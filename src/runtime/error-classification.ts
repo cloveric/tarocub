@@ -42,6 +42,12 @@ function normalizeErrorText(error: unknown): string {
   return String(error);
 }
 
+export function extractQuotaResetHint(error: unknown): string | undefined {
+  const text = normalizeErrorText(error).replace(/\s+/g, " ").trim();
+  const match = text.match(/\b(?:resets?|will reset)\s+(?:in|at|on)\s+([^.;\n]{1,96})/i);
+  return match?.[0]?.trim();
+}
+
 const NAMED_ENGINE_RE = /(?:^|[^a-z0-9_./-])(?:codex|claude|kimi|deepseek|dsh|antigravity|agy)(?=$|[^a-z0-9_./-])/;
 const ENGINE_RUNTIME_RE =
   /\b(?:runtime|process|spawn|adapter|binary|cli|app-server|startup|start|starting|transport|stream|session|turn|exited|exit code)\b/;
@@ -92,15 +98,25 @@ export function classifyFailure(error: unknown): FailureCategory {
   // actionable quota text first so users are not told to sign in again.
   if (
     text.includes("you've hit your usage limit") ||
+    text.includes("you've hit your limit") ||
+    text.includes("you've hit your fast limit") ||
+    text.includes("you've hit your monthly spend limit") ||
+    text.includes("you've hit your channel's monthly spend limit") ||
     text.includes("you've reached your usage limit") ||
     text.includes("you've reached your 5-hour usage limit") ||
     text.includes("quota exceeded") ||
     text.includes("usage limit exceeded") ||
+    text.includes("usage limit reached") ||
+    text.includes("spend limit reached") ||
     text.includes("usagelimitexceeded") ||
     text.includes("quota will reset when the current") ||
     text.includes("purchase extra usage") ||
     text.includes("insufficient_quota") ||
-    text.includes("billing hard limit has been reached")
+    text.includes("billing hard limit has been reached") ||
+    /\binsufficient[\s_-]+(?:quota|balance|credits?)\b/.test(text) ||
+    /\b(?:balance|credits?)[\s_-]+(?:exhausted|depleted)\b/.test(text) ||
+    /\bout[\s_-]+of[\s_-]+(?:credits?|budget)\b/.test(text) ||
+    (NAMED_ENGINE_RE.test(text) && (text.includes("payment required") || /\b402\b/.test(text)))
   ) {
     return "engine-quota";
   }
@@ -111,6 +127,7 @@ export function classifyFailure(error: unknown): FailureCategory {
     && (
       /\bapi(?:_| )error(?:_| )status\s*[:=]\s*429\b/.test(text)
       || /\bapi error\s*:\s*429\b/.test(text)
+      || /\brate[\s_-]*limit[\s_-]*(?:exceeded|reached)\b/.test(text)
       || (/\b429\b/.test(text) && /\b(?:rate limit(?:ed|ing)?|too many requests|resource[_ ]exhausted)\b/.test(text))
       || (NAMED_ENGINE_RE.test(text) && /\b(?:http\s*)?(?:status(?: code)?\s*[:=]?\s*)?429\b/.test(text))
     )
