@@ -1481,7 +1481,7 @@ export function cleanCardText(
   options: { streaming?: boolean } = {},
 ): string {
   const stripped = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(content)));
-  return transformLarkCardMarkdown(renderCodexFileCitations(stripped, locale, options)).trim();
+  return normalizeLarkMarkdown(renderCodexFileCitations(stripped, locale, options)).trim();
 }
 
 const LARK_INLINE_MATH_SYMBOLS: Readonly<Record<string, string>> = {
@@ -1689,7 +1689,7 @@ function parseMarkdownFenceLine(line: string): MarkdownFenceLine | undefined {
   };
 }
 
-function transformLarkCardMarkdown(text: string): string {
+export function normalizeLarkMarkdown(text: string): string {
   const output: string[] = [];
   let fence: Omit<MarkdownFenceLine, "trailing"> | undefined;
   for (const line of text.split("\n")) {

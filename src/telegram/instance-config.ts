@@ -98,6 +98,8 @@ export interface ResumeState {
 
 export interface InstanceConfig {
   engine: InstanceEngine;
+  /** Claude native Chrome integration. Only meaningful for the Claude engine. */
+  claudeChrome: boolean;
   locale: "en" | "zh";
   verbosity: 0 | 1 | 2;
   budgetUsd: number | undefined;
@@ -255,6 +257,7 @@ function parseResumeState(raw: unknown): ResumeState | undefined {
 
 export const DEFAULT_INSTANCE_CONFIG: InstanceConfig = {
   engine: "codex",
+  claudeChrome: false,
   locale: "en",
   verbosity: 1,
   budgetUsd: undefined,
@@ -475,6 +478,7 @@ export async function loadInstanceConfig(stateDir: string): Promise<InstanceConf
   const effort = VALID_EFFORT_LEVELS.includes(config.effort as EffortLevel) ? config.effort as EffortLevel : undefined;
   return {
     engine: config.engine === "claude" || config.engine === "antigravity" || config.engine === "kimi" || config.engine === "deepseek" ? config.engine : "codex",
+    claudeChrome: config.claudeChrome === true,
     locale: config.locale === "zh" ? "zh" : "en",
     verbosity: config.verbosity === 0 ? 0 : config.verbosity === 2 ? 2 : 1,
     budgetUsd: typeof config.budgetUsd === "number" && config.budgetUsd > 0 ? config.budgetUsd : undefined,

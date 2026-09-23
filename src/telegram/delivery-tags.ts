@@ -9,7 +9,7 @@ function blankPreservingNewlines(value: string): string {
   return value.replace(/[^\n\r]/g, " ");
 }
 
-function maskMarkdownCode(text: string): string {
+export function maskMarkdownCode(text: string): string {
   const ranges: Array<{ start: number; end: number }> = [];
   const opener = /(^|\n)([ \t]*)(`{3,}|~{3,})[^\r\n]*\r?\n/g;
   let match: RegExpExecArray | null;
@@ -73,6 +73,53 @@ function maskMarkdownCode(text: string): string {
     cursor = range.end;
   }
   return masked + text.slice(cursor);
+}
+
+export interface InvalidDeliveryPseudoTagMatch {
+  tag: string;
+  index: number;
+}
+
+/** Detect model-invented `[send.batch=…]` forms without executing quoted examples. */
+export function extractInvalidDeliveryPseudoTagMatches(text: string): InvalidDeliveryPseudoTagMatch[] {
+  const searchable = maskMarkdownCode(text);
+  const pattern = /\[send\.(?:file|image|audio|video|batch)\s*=/giu;
+  const matches: InvalidDeliveryPseudoTagMatch[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(searchable)) !== null) {
+    let nestedBrackets = 0;
+    let tagEnd = -1;
+    for (let index = pattern.lastIndex; index < searchable.length; index++) {
+      const char = searchable[index];
+      if (char === "\n" || char === "\r") break;
+      if (char === "[") nestedBrackets++;
+      else if (char === "]") {
+        if (nestedBrackets > 0) nestedBrackets--;
+        else {
+          tagEnd = index + 1;
+          break;
+        }
+      }
+    }
+    if (tagEnd === -1) continue;
+    matches.push({ tag: text.slice(match.index, tagEnd), index: match.index });
+    pattern.lastIndex = tagEnd;
+  }
+  return matches;
+}
+
+export function stripInvalidDeliveryPseudoTags(text: string): string {
+  const matches = extractInvalidDeliveryPseudoTagMatches(text);
+  if (matches.length === 0) {
+    return text;
+  }
+  let next = "";
+  let cursor = 0;
+  for (const match of matches) {
+    next += text.slice(cursor, match.index);
+    cursor = match.index + match.tag.length;
+  }
+  return (next + text.slice(cursor)).replace(/\n{3,}/g, "\n\n").trim();
 }
 
 export function extractDeliveryTagMatches(text: string): DeliveryTagMatch[] {

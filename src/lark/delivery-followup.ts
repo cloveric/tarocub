@@ -1,6 +1,9 @@
 import path from "node:path";
 
-import { extractDeliveryTagMatches } from "../telegram/delivery-tags.js";
+import {
+  extractDeliveryTagMatches,
+  extractInvalidDeliveryPseudoTagMatches,
+} from "../telegram/delivery-tags.js";
 import {
   extractTelegramToolTagMatches,
   parseTelegramToolTagPayload,
@@ -121,6 +124,11 @@ export async function preflightLarkResponseDeliveryDirectives(
   }));
   const issues: LarkDeliveryDirectiveIssue[] = [];
   let sawDeliveryDirective = artifacts.length > 0;
+
+  for (const match of extractInvalidDeliveryPseudoTagMatches(text)) {
+    sawDeliveryDirective = true;
+    issues.push({ path: match.tag, reason: "invalid-directive" });
+  }
 
   for (const match of extractTelegramToolTagMatches(text)) {
     try {

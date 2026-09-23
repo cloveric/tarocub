@@ -184,7 +184,12 @@ export async function handleLarkComment(input: {
         requestOutputDir,
         workspaceOverride: input.workspaceOverride,
         disableRuntimeTimeout: cfg.disableRuntimeTimeout === true,
-        instructions: larkAgentInstructions(),
+        instructions: larkAgentInstructions({
+          engine: cfg.engine,
+          claudeChrome: cfg.claudeChrome,
+          timezone: cfg.timezone,
+          context: "comment",
+        }),
         onEngineEvent: handleEngineEvent,
       });
       await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);

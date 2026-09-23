@@ -123,6 +123,7 @@ describe("loadInstanceConfig", () => {
 
       await expect(loadInstanceConfig(root)).resolves.toMatchObject({
         engine: "codex",
+        claudeChrome: false,
         model: "gpt-5.6-terra",
         effort: "ultra",
       });
@@ -144,6 +145,7 @@ describe("loadInstanceConfig", () => {
 
       await expect(loadInstanceConfig(root)).resolves.toMatchObject({
         engine: "codex",
+        claudeChrome: false,
         model: undefined,
         effort: undefined,
       });
@@ -159,6 +161,7 @@ describe("loadInstanceConfig", () => {
     try {
       await expect(loadInstanceConfig(root)).resolves.toEqual({
         engine: "codex",
+        claudeChrome: false,
         locale: "en",
         verbosity: 1,
         budgetUsd: undefined,
@@ -190,6 +193,7 @@ describe("loadInstanceConfig", () => {
 
       await expect(loadInstanceConfig(root)).resolves.toEqual({
         engine: "codex",
+        claudeChrome: false,
         locale: "en",
         verbosity: 1,
         budgetUsd: undefined,
@@ -222,6 +226,7 @@ describe("loadInstanceConfig", () => {
 
       await expect(loadInstanceConfig(root)).resolves.toEqual({
         engine: "codex",
+        claudeChrome: false,
         locale: "en",
         verbosity: 1,
         budgetUsd: undefined,
@@ -254,6 +259,7 @@ describe("loadInstanceConfig", () => {
         path.join(root, "config.json"),
         JSON.stringify({
           engine: "claude",
+          claudeChrome: true,
           locale: "zh",
           budgetUsd: "5", // invalid: must be a positive number
           model: "opus[1m]",
@@ -271,6 +277,7 @@ describe("loadInstanceConfig", () => {
 
       // One poisoned field must not flip the engine to codex or empty the allowlist.
       expect(config.engine).toBe("claude");
+      expect(config.claudeChrome).toBe(true);
       expect(config.locale).toBe("zh");
       expect(config.model).toBe("opus[1m]");
       expect(config.groupMode.allowedChatIds).toEqual([-100123]);
@@ -326,6 +333,7 @@ describe("loadInstanceConfig", () => {
         path.join(root, "config.json"),
         JSON.stringify({
           engine: "claude",
+          claudeChrome: true,
           locale: "zh",
           verbosity: 2,
           budgetUsd: 10,
@@ -355,6 +363,7 @@ describe("loadInstanceConfig", () => {
 
       await expect(loadInstanceConfig(root)).resolves.toEqual({
         engine: "claude",
+        claudeChrome: true,
         locale: "zh",
         verbosity: 2,
         budgetUsd: 10,
@@ -393,6 +402,7 @@ describe("loadInstanceConfig", () => {
 
       await expect(loadInstanceConfig(root)).resolves.toEqual({
         engine: "codex",
+        claudeChrome: false,
         locale: "en",
         verbosity: 1,
         budgetUsd: undefined,

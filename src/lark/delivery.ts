@@ -5,7 +5,9 @@ import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
 import { renderCodexFileCitations } from "../runtime/codex-file-citations.js";
 import {
   extractDeliveryTagMatches,
+  extractInvalidDeliveryPseudoTagMatches,
   stripDeliveryTags,
+  stripInvalidDeliveryPseudoTags,
 } from "../telegram/delivery-tags.js";
 import {
   extractCronAddTagMatches,
@@ -20,6 +22,7 @@ import { chunkTelegramMessage, type Locale } from "../telegram/message-renderer.
 import { executeCronAddTool } from "../tools/cron-add-tool.js";
 import { executeTelegramTool } from "../tools/telegram-tool-executor.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
+import { normalizeLarkMarkdown } from "./card-renderer.js";
 import {
   extractWholeResponseFileBlock,
   isLarkSendToolName,
@@ -30,7 +33,6 @@ import {
   preflightLarkInlineFile,
   resolveLarkDeliveryRoots,
   type LarkFileRejectReason,
-  type LarkSendArtifact,
   type LarkSendPathKind,
 } from "./delivery-preflight.js";
 import { parseLarkDocumentCreateInput } from "./document-client.js";
@@ -157,6 +159,7 @@ export function hasLarkPostTurnDelivery(text: string): boolean {
   return Boolean(
     extractWholeResponseFileBlock(text)
     || extractDeliveryTagMatches(text).length > 0
+    || extractInvalidDeliveryPseudoTagMatches(text).length > 0
     || extractTelegramToolTagMatches(text).length > 0
     || extractCronAddTagMatches(text).length > 0
   );
@@ -255,6 +258,8 @@ export async function deliverLarkResponse(input: {
   instanceName?: string;
   sendText?: boolean;
   allowAnyAbsolutePath?: boolean;
+  /** Scheduled task results must not create or mutate schedules recursively. */
+  allowCronMutations?: boolean;
 }): Promise<LarkDeliveryResult> {
   const locale = await resolveLarkLocale(input.stateDir);
   let ok = true;
@@ -311,7 +316,7 @@ export async function deliverLarkResponse(input: {
   const cronAddMatches = extractCronAddTagMatches(input.text);
   const matches = extractDeliveryTagMatches(input.text);
   const cleanedText = renderCodexFileCitations(
-    stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(input.text))),
+    stripInvalidDeliveryPseudoTags(stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(input.text)))),
     locale,
   );
   const replyOptions = larkReplyOptions(input.replyTo, input.replyInThread);
@@ -319,12 +324,34 @@ export async function deliverLarkResponse(input: {
   // same operation. Claim paths across both before sending so a model cannot
   // accidentally upload one artifact twice by emitting both protocols.
   const claimedArtifactPaths = new Set<string>();
+  const parsedToolCronModes = new Map<number, "recurring" | "one-shot">();
+  for (const [index, match] of toolMatches.entries()) {
+    try {
+      const parsed = parseTelegramToolTagPayload(match.payload);
+      if (parsed.name === "cron.add") {
+        const mode = cronAddMode(parsed.payload);
+        if (mode) parsedToolCronModes.set(index, mode);
+      }
+    } catch {
+      // The ordinary tool parser below reports malformed JSON.
+    }
+  }
+  const legacyCronModes = cronAddMatches.map((match) => cronAddMode(match.payload));
+  const hasRecurringCronAdd = [...parsedToolCronModes.values(), ...legacyCronModes].includes("recurring");
+  let recurringCronExecuted = false;
 
-  for (const match of toolMatches) {
+  for (const [toolIndex, match] of toolMatches.entries()) {
     let toolName = "unknown";
     try {
       const parsed = parseTelegramToolTagPayload(match.payload);
       toolName = parsed.name;
+      if (parsed.name === "cron.add" && hasRecurringCronAdd) {
+        const mode = parsedToolCronModes.get(toolIndex);
+        if (mode !== "recurring" || recurringCronExecuted) {
+          continue;
+        }
+        recurringCronExecuted = true;
+      }
       const toolOk = await executeLarkToolTag({
         ...input,
         name: parsed.name,
@@ -356,8 +383,15 @@ export async function deliverLarkResponse(input: {
     }
   }
 
-  for (const match of cronAddMatches) {
+  for (const [cronIndex, match] of cronAddMatches.entries()) {
     try {
+      if (hasRecurringCronAdd) {
+        const mode = legacyCronModes[cronIndex];
+        if (mode !== "recurring" || recurringCronExecuted) {
+          continue;
+        }
+        recurringCronExecuted = true;
+      }
       const toolOk = await executeLarkToolTag({
         ...input,
         name: "cron.add",
@@ -383,22 +417,6 @@ export async function deliverLarkResponse(input: {
       }
     }
     deliveryMatches = unclaimedMatches;
-  }
-
-  if (deliveryMatches.length > 0) {
-    const legacyArtifacts: LarkSendArtifact[] = deliveryMatches.map((match) => ({
-      path: match.path,
-      kind: match.preferPhoto ? "image" : "file",
-    }));
-    const withinAggregateLimit = await enforceLarkBatchAggregateLimit(
-      { ...input, locale },
-      legacyArtifacts,
-      replyOptions,
-    );
-    if (!withinAggregateLimit) {
-      ok = false;
-      deliveryMatches = [];
-    }
   }
 
   if (deliveryMatches.length > 0) {
@@ -544,7 +562,7 @@ export async function sendLarkMarkdown(
   markdown: string,
   options: LarkSendOptions | undefined,
 ): Promise<void> {
-  for (const chunk of chunkLarkMarkdown(markdown)) {
+  for (const chunk of chunkLarkMarkdown(normalizeLarkMarkdown(markdown))) {
     const resolvedChunk = await resolveLarkMentionsInText({
       enabled: shouldResolveLarkMentions(process.env),
       channel,
@@ -562,7 +580,7 @@ async function sendLarkMarkdownBestEffort(
   options: LarkSendOptions | undefined,
 ): Promise<number> {
   let failedChunks = 0;
-  for (const chunk of chunkLarkMarkdown(markdown)) {
+  for (const chunk of chunkLarkMarkdown(normalizeLarkMarkdown(markdown))) {
     try {
       const resolvedChunk = await resolveLarkMentionsInText({
         enabled: shouldResolveLarkMentions(process.env),
@@ -648,8 +666,17 @@ async function executeLarkToolTag(input: {
   instanceName?: string;
   locale: Locale;
   claimedArtifactPaths?: Set<string>;
+  allowCronMutations?: boolean;
 }): Promise<boolean> {
   const payload = payloadObject(input.payload);
+  if (input.name.startsWith("cron.") && input.allowCronMutations === false) {
+    await input.channel.send(input.chatId, {
+      text: input.locale === "en"
+        ? "Scheduled runs cannot create or modify schedules."
+        : "定时任务执行期间不能创建或修改其他定时任务。",
+    }, larkReplyOptions(input.replyTo, input.replyInThread));
+    return false;
+  }
   if (input.name === "cron.add") {
     const result = await executeCronAddTool(input.payload, {
       cronRuntime: input.runtime.cronRuntime ?? null,
@@ -717,14 +744,6 @@ async function executeLarkToolTag(input: {
       return true;
     }
     if (input.name === "send.batch") {
-      const withinAggregateLimit = await enforceLarkBatchAggregateLimit(
-        input,
-        artifacts,
-        larkReplyOptions(input.replyTo, input.replyInThread),
-      );
-      if (!withinAggregateLimit) {
-        return false;
-      }
       const images = artifacts.filter((artifact) => artifact.kind === "image");
       if (images.length > 1) {
         ok = await sendLarkImageArtifactBatch(
@@ -846,6 +865,26 @@ async function executeLarkToolTag(input: {
     text: input.locale === "en" ? `Unsupported Lark tool ${input.name}.` : `错误：不支持的飞书工具 ${input.name}。`,
   }, larkReplyOptions(input.replyTo, input.replyInThread));
   return false;
+}
+
+function cronAddMode(payload: unknown): "recurring" | "one-shot" | undefined {
+  try {
+    const parsed = typeof payload === "string" ? JSON.parse(payload) as unknown : payload;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const body = parsed as Record<string, unknown>;
+    if (body.cron !== undefined && body.cron !== null && body.cron !== "") {
+      return "recurring";
+    }
+    if ((body.in !== undefined && body.in !== null && body.in !== "")
+      || (body.at !== undefined && body.at !== null && body.at !== "")) {
+      return "one-shot";
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 async function claimLarkArtifactPath(claimed: Set<string>, filePath: string): Promise<boolean> {
@@ -1180,42 +1219,6 @@ type LarkImageDeliveryInput = {
   locale: Locale;
 };
 
-async function enforceLarkBatchAggregateLimit(
-  input: LarkImageDeliveryInput,
-  artifacts: readonly LarkSendArtifact[],
-  replyOptions: LarkSendOptions | undefined,
-): Promise<boolean> {
-  const deliveryRoots = await resolveLarkDeliveryRoots(input);
-  const accepted: Array<{ artifact: LarkSendArtifact; realPath: string }> = [];
-  let totalBytes = 0;
-
-  for (const artifact of artifacts) {
-    const pathPreflight = await preflightLarkDeliveryPath(artifact.path, deliveryRoots);
-    if (!pathPreflight.ok) {
-      continue;
-    }
-    totalBytes += pathPreflight.fileBytes;
-    accepted.push({ artifact, realPath: pathPreflight.realPath });
-  }
-  if (totalBytes <= LARK_BATCH_UPLOAD_MAX_BYTES) {
-    return true;
-  }
-
-  for (const { artifact, realPath } of accepted) {
-    await appendLarkFileRejectedTimeline(input, {
-      path: artifact.path,
-      realPath,
-      reason: "batch-too-large",
-      detail: `${totalBytes} bytes > ${LARK_BATCH_UPLOAD_MAX_BYTES}`,
-      kind: artifact.kind,
-    });
-  }
-  await input.channel.send(input.chatId, {
-    text: renderLarkFileDeliveryError("batch-too-large", input.locale, { fileBytes: totalBytes }),
-  }, replyOptions);
-  return false;
-}
-
 async function sendLarkImageArtifactBatch(
   input: LarkImageDeliveryInput,
   artifacts: ReadonlyArray<{ path: string; caption?: string }>,
@@ -1224,7 +1227,6 @@ async function sendLarkImageArtifactBatch(
   const deliveryRoots = await resolveLarkDeliveryRoots(input);
   const pendingImages: Array<{ caption?: string; real: string; originalPath: string; bytes: number }> = [];
   let ok = true;
-  let totalBytes = 0;
 
   for (const artifact of artifacts) {
     const pathPreflight = await preflightLarkDeliveryPath(artifact.path, deliveryRoots);
@@ -1247,7 +1249,6 @@ async function sendLarkImageArtifactBatch(
       continue;
     }
 
-    totalBytes += pathPreflight.fileBytes;
     pendingImages.push({
       ...(artifact.caption ? { caption: artifact.caption } : {}),
       real: pathPreflight.realPath,
@@ -1259,22 +1260,25 @@ async function sendLarkImageArtifactBatch(
   if (pendingImages.length === 0) {
     return false;
   }
-  if (totalBytes > LARK_BATCH_UPLOAD_MAX_BYTES) {
-    for (const image of pendingImages) {
-      await appendLarkFileRejectedTimeline(input, {
-        path: image.originalPath,
-        realPath: image.real,
-        reason: "batch-too-large",
-        detail: `${totalBytes} bytes > ${LARK_BATCH_UPLOAD_MAX_BYTES}`,
-        kind: "image",
-      });
+  const batches: typeof pendingImages[] = [];
+  let current: typeof pendingImages = [];
+  let currentBytes = 0;
+  for (const image of pendingImages) {
+    if (current.length > 0 && currentBytes + image.bytes > LARK_BATCH_UPLOAD_MAX_BYTES) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
     }
-    await input.channel.send(input.chatId, {
-      text: renderLarkFileDeliveryError("batch-too-large", input.locale, { fileBytes: totalBytes }),
-    }, replyOptions);
-    return false;
+    current.push(image);
+    currentBytes += image.bytes;
   }
-  return await deliverLarkPendingImages(input, pendingImages, replyOptions) && ok;
+  if (current.length > 0) {
+    batches.push(current);
+  }
+  for (const batch of batches) {
+    ok = await deliverLarkPendingImages(input, batch, replyOptions) && ok;
+  }
+  return ok;
 }
 
 /**

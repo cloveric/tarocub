@@ -25,6 +25,8 @@ export interface MeetingRunBridge {
     files: string[];
     conversationKey?: string;
     locale?: "en" | "zh";
+    instructions?: string;
+    turnInstructions?: string;
   }): Promise<{ text: string }>;
 }
 
@@ -43,6 +45,7 @@ export interface MeetingOrchestratorDeps {
   /** The IM chat the join originated from, for respondIn im/both + summaries. */
   originChatId?: (session: MeetingSession) => string | undefined;
   locale?: () => "en" | "zh";
+  agentInstructions?: () => string;
 }
 
 /** case-insensitive prefix match; returns the remaining text, or undefined if not addressed. */
@@ -141,6 +144,7 @@ export async function answerInMeeting(
     files: [],
     conversationKey: `lark:meeting:${session.meetingId}`,
     locale,
+    instructions: deps.agentInstructions?.(),
   });
   const answer = result.text.trim();
   if (opts.deliver === "broadcast" && answer) {

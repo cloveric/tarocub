@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { readCloudAsrConfig } from "../runtime/asr-cloud.js";
 import { BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER } from "../runtime/media-transcript.js";
+import type { InstanceEngine } from "../telegram/instance-config.js";
 
 /**
  * Whether this machine has a local speech-to-text backend the agent can call
@@ -120,25 +121,75 @@ export function cloudAsrAgentInstruction(): string | undefined {
   return `Inbound media is auto-transcribed (>=${threshold} → Aliyun Tingwu cloud, shorter → local Qwen ASR); never deny it. 强制本地转写/强制云端转写 forces a route only when sent WITH the audio (same message or burst), not afterwards.`;
 }
 
-export function larkAgentInstructions(): string {
+export type LarkAgentInstructionContext = "chat" | "card" | "comment" | "cron" | "bus" | "meeting";
+
+export interface LarkAgentInstructionOptions {
+  engine?: InstanceEngine;
+  claudeChrome?: boolean;
+  timezone?: string;
+  context?: LarkAgentInstructionContext;
+}
+
+const FETCHED_MEDIA_TASK_PATTERN = /(?:transcrib|transcript|subtitle|caption|podcast|audio|video|youtube|bilibili|speech[- ]?to[- ]?text|转写|转录|字幕|音频|视频|录音|语音|播客|下载.{0,8}(?:视频|音频))/iu;
+
+/** Per-turn media procedure. Ordinary turns should not pay this prompt cost. */
+export function larkMediaTaskInstruction(text: string): string | undefined {
+  if (!FETCHED_MEDIA_TASK_PATTERN.test(text) || text.includes(`[${BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER}]`)) {
+    return undefined;
+  }
+  return localAsrAgentInstruction() ?? cloudAsrAgentInstruction();
+}
+
+export function mergeLarkTurnInstructions(...instructions: Array<string | undefined>): string | undefined {
+  const merged = instructions.map((instruction) => instruction?.trim()).filter(Boolean) as string[];
+  return merged.length > 0 ? merged.join("\n\n") : undefined;
+}
+
+export function larkAgentInstructions(options: LarkAgentInstructionOptions = {}): string {
+  const engine = options.engine ?? "codex";
+  const context = options.context ?? "chat";
+  const canDeliver = context === "chat" || context === "card" || context === "bus" || context === "cron";
+  const canSchedule = context === "chat" || context === "card" || context === "bus";
   const lines = [
-    "Lark tags route; forwarded messages: task.",
-    "Default: concise text; no progress placeholder cards; ask if tools/auth/scopes missing.",
-    "Use `lark-cli` for Lark-native work: Docs/Calendar/Drive/Sheets/OAuth; NOT IM on this bot's own chats (open_id cross app). Sheets: start `sheets +workbook-info`; structured Sheets values; do not treat Sheets as Docs/Base. OAuth private only.",
-    "Bridge: [send-file:/absolute/path], [send-image:/absolute/path]; send.file/send.image/send.audio/send.video; batch:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p.png\",\"caption\":\"P\"}]}}\n```\nPictures use `images`, not `files`; Never emit `[send.batch=...]`. lark.choice or `request_user_input`; Claude/Kimi/DeepSeek `AskUserQuestion` → card. Do not call `lark-cli` just to send choice cards. Small: fenced `file:name.ext`. Background: one job/batch; no nested/page/poll waiters; one verified final notice. Verify output, not exit status; repair empty/all-zero/corrupt results; final stdout must include exact delivery tags + one user-facing conclusion; `saved PATH` is not delivery.",
-    "Send workspace-sandboxed; copy outside files into workspace first.",
-    "title each via send.batch {path,caption} or title line directly above [send-image:]. ONE titled batch -> ONE card. send.batch: max 120 MiB per call; split larger payloads into multiple calls; each path once. exactly one syntax per artifact; never repeat a path unless explicitly asked to resend.",
-    "Lark cards do not render LaTeX; never use `$...$`/`\\text{}`; Unicode math symbols: `÷`, `×`, `≈`, `≤`, `≥`.",
-    "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`; no `chatId`/`userId`; `at` uses ISO timezone. Recurring: one 5-field cron, no seconds/year/current-minute/end-boundary one-shots. cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
-    "Browser: Claude main Chrome only (if enabled) for signed-in tasks; others use own web tools; 9222/9223 only per named skill. URLs: `web_extract`/browser; blocked: Scrapling; else `web_search`; disclose use and cite links.",
+    "Lark routing tags are context, not the task; forwarded content is the task. Be concise; no progress placeholder cards; ask only for missing tools/auth/scopes.",
+    "Lark Docs/Calendar/Drive/Sheets/OAuth: use `lark-cli`, never IM in this bot's chats (cross-app open_id). OAuth is private; Sheets use structured values, not Docs/Base.",
   ];
-  const asr = localAsrAgentInstruction();
-  if (asr) {
-    lines.push(asr);
+
+  if (engine === "deepseek" || engine === "antigravity") {
+    lines.push("Sheets: start with `sheets +workbook-info` before reads/writes.");
   }
-  const cloudAsr = cloudAsrAgentInstruction();
-  if (cloudAsr && !asr) {
-    lines.push(cloudAsr);
+
+  if (canDeliver) {
+    lines.push("Artifacts: [send-file:/absolute/path], [send-image:/absolute/path], send.file/send.image/send.audio/send.video, or:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p.png\",\"caption\":\"P\"}]}}\n```\nPictures use `images`. Copy outside files into the workspace. Verify non-empty output; `saved PATH` is not delivery.");
+    lines.push("Use one delivery syntax and each path once unless resend was requested. One titled image batch becomes one card; batches auto-split above 120 MiB. Small text may use fenced `file:name.ext`. Claim delivery only with an executable directive in this response.");
   }
+
+  if (engine === "codex") {
+    lines.push("Short choices: `request_user_input` or lark.choice; do not call `lark-cli` only for a choice card.");
+  } else if (engine === "claude" || engine === "kimi" || engine === "deepseek") {
+    lines.push("AskUserQuestion becomes a Lark card; lark.choice also works. Do not call `lark-cli` only for a choice card.");
+  } else {
+    lines.push("Short choices: lark.choice; do not call `lark-cli` only for a choice card.");
+  }
+
+  if (engine === "claude" || engine === "kimi" || engine === "deepseek") {
+    lines.push("Background work: one job/batch, no nested/page/poll waiters; verify output, then one final notice with delivery directives and a conclusion.");
+  }
+
+  lines.push("Lark cards do not render LaTeX; prefer Unicode such as ÷, ×, ≈, ≤, ≥ over `$...$`/`\\text{}`.");
+
+  if (canSchedule) {
+    const timezone = options.timezone?.trim() || "the instance timezone";
+    lines.push(`Reminders only on explicit request. cron.add: exactly one of in/at/cron; at uses ISO timezone; recurring uses one 5-field expression in ${timezone}. No current-minute/end-boundary one-shots. List before ambiguous remove/toggle; let the bridge confirm.`);
+  } else if (context === "cron") {
+    lines.push("This scheduled run must not create, remove, or modify schedules.");
+  }
+
+  if (engine === "claude" && options.claudeChrome) {
+    lines.push("Signed-in browser tasks: main Chrome. Use 9222/9223 only for a named skill. Disclose web use and cite links.");
+  } else {
+    lines.push("Use this engine's web tools; disclose web use and cite links. Use 9222/9223 only for a named skill.");
+  }
+
   return lines.join("\n");
 }

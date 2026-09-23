@@ -7,6 +7,7 @@ import { createFreshCronSessionId } from "../runtime/cron-session.js";
 import type { CronExecutor } from "../runtime/cron-scheduler.js";
 import type { CronJobRecord } from "../state/cron-store-schema.js";
 import { loadInstanceConfig } from "../telegram/instance-config.js";
+import { larkAgentInstructions, larkMediaTaskInstruction, type LarkAgentInstructionOptions } from "./agent-instructions.js";
 import { claimLarkRunSlot } from "./bus.js";
 import { deliverLarkContinuationCards, sendLarkCardWithFallback } from "./card-delivery.js";
 import {
@@ -43,6 +44,7 @@ type LarkCronDeliverResponse = (input: {
   replyInThread?: boolean;
   /** When false, only files/overflow are delivered (the text is already in the run card). */
   sendText?: boolean;
+  allowCronMutations?: boolean;
 }) => Promise<LarkDeliveryResult | void>;
 
 export function buildLarkCronExecutor(input: {
@@ -51,7 +53,7 @@ export function buildLarkCronExecutor(input: {
   runtime: LarkServiceRuntime;
   stateDir: string;
   workspaceOverride?: string;
-  agentInstructions?: () => string;
+  agentInstructions?: (options: LarkAgentInstructionOptions) => string;
   deliverResponse?: LarkCronDeliverResponse;
   /** Factory for the run card an AI-task cron renders its result into (injected to avoid a cron→message-handler import cycle). */
   createRunCard?: typeof import("./message-handler.js")["createLarkRunCardController"];
@@ -165,7 +167,13 @@ export function buildLarkCronExecutor(input: {
             sessionIdOverride: job.sessionMode === "new_per_run" ? createFreshCronSessionId(job) : undefined,
             abortSignal: controller.signal,
             disableRuntimeTimeout: cfg.disableRuntimeTimeout === true,
-            instructions: input.agentInstructions?.(),
+            instructions: (input.agentInstructions ?? larkAgentInstructions)({
+              engine: cfg.engine,
+              claudeChrome: cfg.claudeChrome,
+              timezone: cfg.timezone,
+              context: "cron",
+            }),
+            turnInstructions: larkMediaTaskInstruction(job.prompt),
             onApprovalRequest: input.requestApproval
               ? async (request) => await input.requestApproval!({
                   channel: input.channel,
@@ -257,6 +265,7 @@ export function buildLarkCronExecutor(input: {
               larkThreadId: job.larkThreadId,
               larkMessageId: job.larkMessageId,
               sendText: runCard ? !answerShownInCard && !overflowDelivered : true,
+              allowCronMutations: false,
               ...replyFields,
             });
             if (deliveryResult && !deliveryResult.ok) {

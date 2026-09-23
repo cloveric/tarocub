@@ -25,6 +25,7 @@ import {
   type LarkNormalizedBridgeMessage,
 } from "./message-normalizer.js";
 import { renderLarkBoardTaskCard } from "./board-card.js";
+import { larkAgentInstructions, larkMediaTaskInstruction } from "./agent-instructions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
 import { renderLarkBackgroundTaskHeader, resolveLarkLocale } from "./locale.js";
@@ -341,7 +342,16 @@ export async function handleLarkMiniBusCommand(
     }),
   };
   const bridge: MiniBusCommandBridge = {
-    handleAuthorizedMessage: async (bridgeInput) => await input.bridge.handleAuthorizedMessage(bridgeInput),
+    handleAuthorizedMessage: async (bridgeInput) => await input.bridge.handleAuthorizedMessage({
+      ...bridgeInput,
+      instructions: larkAgentInstructions({
+        engine: cfg.engine,
+        claudeChrome: cfg.claudeChrome,
+        timezone: cfg.timezone,
+        context: "bus",
+      }),
+      turnInstructions: larkMediaTaskInstruction(bridgeInput.text),
+    }),
   };
 
   // Same stop wiring as the board handler above: register under the originating
@@ -424,6 +434,13 @@ export async function handleLarkDelegationCommand(
       const delegatedInput: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0] = {
         ...bridgeInput,
         workspaceOverride: bridgeInput.workspaceOverride,
+        instructions: larkAgentInstructions({
+          engine: cfg.engine,
+          claudeChrome: cfg.claudeChrome,
+          timezone: cfg.timezone,
+          context: "bus",
+        }),
+        turnInstructions: larkMediaTaskInstruction(bridgeInput.text),
       };
       if (bridgeInput.chatType !== "bus") {
         delegatedInput.conversationKey = normalized.conversationKey;
@@ -480,7 +497,16 @@ export async function handleLarkCrewWorkflow(
     instanceName: input.instanceName ?? "lark",
     abortSignal: input.abortSignal,
     bridge: {
-      handleAuthorizedMessage: async (bridgeInput) => await input.bridge.handleAuthorizedMessage(bridgeInput),
+      handleAuthorizedMessage: async (bridgeInput) => await input.bridge.handleAuthorizedMessage({
+        ...bridgeInput,
+        instructions: larkAgentInstructions({
+          engine: cfg.engine,
+          claudeChrome: cfg.claudeChrome,
+          timezone: cfg.timezone,
+          context: "bus",
+        }),
+        turnInstructions: larkMediaTaskInstruction(bridgeInput.text),
+      }),
     },
     onApprovalRequest: async (request) => await input.requestApproval({
       channel: input.channel,

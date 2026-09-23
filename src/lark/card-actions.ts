@@ -18,7 +18,7 @@ import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
 import { loadInstanceConfig, resolveInstanceWorkspacePath, updateInstanceConfig, type ResumeState } from "../telegram/instance-config.js";
 import { applyConversationResumeScope } from "../runtime/conversation-resume.js";
 import type { Locale } from "../telegram/message-renderer.js";
-import { larkAgentInstructions } from "./agent-instructions.js";
+import { larkAgentInstructions, larkMediaTaskInstruction } from "./agent-instructions.js";
 import { handleLarkBoardCommand } from "./bus.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
 import { renderLarkApprovalCard, renderLarkQueueCancelledCard } from "./card-renderer.js";
@@ -2273,7 +2273,13 @@ async function runLarkCardChoice(input: {
         request,
         abortSignal: request.abortSignal ?? abortController.signal,
       }),
-      instructions: larkAgentInstructions(),
+      instructions: larkAgentInstructions({
+        engine: cfg.engine,
+        claudeChrome: cfg.claudeChrome,
+        timezone: cfg.timezone,
+        context: "card",
+      }),
+      turnInstructions: larkMediaTaskInstruction(input.text),
       onEngineEvent: handleEngineEvent,
     });
     await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);
@@ -2496,7 +2502,13 @@ async function runLarkArchiveContinueCardAction(input: {
         request,
         abortSignal: request.abortSignal ?? abortController.signal,
       }),
-      instructions: larkAgentInstructions(),
+      instructions: larkAgentInstructions({
+        engine: cfg.engine,
+        claudeChrome: cfg.claudeChrome,
+        timezone: cfg.timezone,
+        context: "card",
+      }),
+      turnInstructions: larkMediaTaskInstruction(workflowResult.text),
       onEngineEvent: handleEngineEvent,
     });
     await recordBridgeTurnUsage(input.stateDir, result.usage, cfg.budgetUsd);

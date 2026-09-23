@@ -24,7 +24,11 @@ import {
 } from "../telegram/instance-config.js";
 import { createDefaultTranscribeVoice } from "../telegram/message-input.js";
 import { LarkGoalRunController, claimLarkRunSlot, handleLarkCrewWorkflow } from "./bus.js";
-import { larkAgentInstructions } from "./agent-instructions.js";
+import {
+  larkAgentInstructions,
+  larkMediaTaskInstruction,
+  mergeLarkTurnInstructions,
+} from "./agent-instructions.js";
 import {
   dropPendingLarkAttachmentBurst,
   handleLarkApprovalTextCommand,
@@ -2273,8 +2277,16 @@ async function runNormalizedLarkMessage(
           onTurnLockWait: handleTurnLockWait,
           turnPoolWaitNotifyAfterMs: 10_000,
           onTurnPoolWait: handleTurnPoolWait,
-          instructions: larkAgentInstructions(),
-          turnInstructions: larkDeliveryFollowupInstruction(commandText),
+          instructions: larkAgentInstructions({
+            engine: cfg.engine,
+            claudeChrome: cfg.claudeChrome,
+            timezone: cfg.timezone,
+            context: "chat",
+          }),
+          turnInstructions: mergeLarkTurnInstructions(
+            larkDeliveryFollowupInstruction(commandText),
+            larkMediaTaskInstruction(requestText),
+          ),
           extraEnv: {
             CCTB_LARK_ACTIVE_TURN: "1",
             CCTB_LARK_ACTIVE_INSTANCE: input.instanceName ?? path.basename(input.stateDir),
@@ -2382,18 +2394,14 @@ async function runNormalizedLarkMessage(
           result.text,
           deliveryPreflight,
         );
-        const outsideWorkspaceIssues = initialDeliveryDirectivePreflight.issues.filter(
-          (issue) => issue.reason === "outside-workspace",
+        const deliveryIssues = initialDeliveryDirectivePreflight.issues;
+        const hasRepairableDeliveryIssue = deliveryIssues.some(
+          (issue) => issue.reason === "outside-workspace" || issue.reason === "invalid-directive",
         );
-        const allArtifactsRejectedOutsideWorkspace = outsideWorkspaceIssues.length > 0
-          && outsideWorkspaceIssues.length === initialDeliveryDirectivePreflight.issues.length
-          && outsideWorkspaceIssues.length === initialDeliveryDirectivePreflight.artifactCount;
-        // Mixed batches proceed to the sender: valid siblings are delivered and
-        // invalid paths receive an explicit error. Failed obligations with the
-        // same deterministic path errors are abandoned on boot, so they are not
-        // replayed as duplicate partial batches.
-        if (allArtifactsRejectedOutsideWorkspace) {
-          for (const issue of outsideWorkspaceIssues) {
+        // Repair the whole response before sending any sibling. Partial delivery
+        // is ambiguous to users and cannot be safely replayed after a restart.
+        if (initialDeliveryDirectivePreflight.sawDirective && hasRepairableDeliveryIssue) {
+          for (const issue of deliveryIssues) {
             await appendLarkTimelineEvent(input.stateDir, normalized, {
               type: "file.rejected",
               outcome: "rejected",
@@ -2413,7 +2421,7 @@ async function runNormalizedLarkMessage(
             detail: "delivery_preflight_rejected_path",
             metadata: {
               phase: "delivery-preflight-guard",
-              rejectedPaths: outsideWorkspaceIssues.length,
+              rejectedPaths: deliveryIssues.length,
             },
           });
           const firstUsage = result.usage;

@@ -28,6 +28,7 @@ export interface LarkMeetingSupportDeps {
   botOpenId?: () => string | undefined;
   botName?: () => string | undefined;
   locale?: () => "en" | "zh";
+  agentInstructions?: () => string;
   /** Stable numeric conversation key for a meeting's agent run. */
   meetingChatId: (session: MeetingSession) => number;
   log?: (message: string) => void;
@@ -56,6 +57,7 @@ export function attachLarkMeetingSupport(deps: LarkMeetingSupportDeps): LarkMeet
     ...(deps.botName ? { botName: deps.botName } : {}),
     meetingChatId: deps.meetingChatId,
     ...(deps.locale ? { locale: deps.locale } : {}),
+    ...(deps.agentInstructions ? { agentInstructions: deps.agentInstructions } : {}),
   };
 
   const manager = new MeetingManager({

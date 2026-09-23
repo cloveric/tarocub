@@ -26,7 +26,7 @@ function batchToolCall(paths: string[]): string {
 }
 
 describe("Lark image batch resource bounds", () => {
-  it("rejects a mixed send.batch over 120 MiB before sending any artifact", async () => {
+  it("delivers a mixed send.batch above 120 MiB without dropping valid artifacts", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-batch-mixed-"));
     const workspace = path.join(stateDir, "workspace");
     const paths = Array.from({ length: 5 }, (_, index) => path.join(workspace, `part-${index + 1}.bin`));
@@ -53,12 +53,12 @@ describe("Lark image batch resource bounds", () => {
         stateDir,
       });
 
-      expect(result.ok).toBe(false);
-      expect((channel.send as ReturnType<typeof vi.fn>).mock.calls.some((call) => {
+      expect(result.ok).toBe(true);
+      expect((channel.send as ReturnType<typeof vi.fn>).mock.calls.filter((call) => {
         const payload = call[1] as { file?: unknown; image?: unknown; card?: unknown };
         return Boolean(payload.file || payload.image || payload.card);
-      })).toBe(false);
-      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).toContain("120MB");
+      })).toHaveLength(5);
+      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).not.toContain("120MB");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -93,7 +93,7 @@ describe("Lark image batch resource bounds", () => {
     }
   });
 
-  it("rejects a legacy mixed batch over 120 MiB before sending any artifact", async () => {
+  it("delivers a legacy mixed batch above 120 MiB without dropping valid artifacts", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-batch-legacy-mixed-"));
     const workspace = path.join(stateDir, "workspace");
     const paths = Array.from({ length: 5 }, (_, index) => path.join(workspace, `part-${index + 1}.bin`));
@@ -116,18 +116,18 @@ describe("Lark image batch resource bounds", () => {
         stateDir,
       });
 
-      expect(result.ok).toBe(false);
-      expect((channel.send as ReturnType<typeof vi.fn>).mock.calls.some((call) => {
+      expect(result.ok).toBe(true);
+      expect((channel.send as ReturnType<typeof vi.fn>).mock.calls.filter((call) => {
         const payload = call[1] as { file?: unknown; image?: unknown; card?: unknown };
         return Boolean(payload.file || payload.image || payload.card);
-      })).toBe(false);
-      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).toContain("120MB");
+      })).toHaveLength(5);
+      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).not.toContain("120MB");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
 
-  it("rejects a batch whose images exceed 120 MiB in aggregate before uploading", async () => {
+  it("automatically splits image batches above 120 MiB", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-batch-bytes-"));
     const workspace = path.join(stateDir, "workspace");
     const paths = Array.from({ length: 5 }, (_, index) => path.join(workspace, `p${index + 1}.png`));
@@ -148,9 +148,13 @@ describe("Lark image batch resource bounds", () => {
         stateDir,
       });
 
-      expect(result.ok).toBe(false);
-      expect(upload).not.toHaveBeenCalled();
-      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).toContain("120MB");
+      expect(result.ok).toBe(true);
+      expect(upload).toHaveBeenCalledTimes(5);
+      expect((channel.send as ReturnType<typeof vi.fn>).mock.calls.filter((call) => {
+        const payload = call[1] as { card?: unknown };
+        return Boolean(payload.card);
+      })).toHaveLength(2);
+      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).not.toContain("120MB");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

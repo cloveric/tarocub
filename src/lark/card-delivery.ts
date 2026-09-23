@@ -1,5 +1,5 @@
 import type { Locale } from "../telegram/message-renderer.js";
-import { renderLarkContinuationCard } from "./card-renderer.js";
+import { normalizeLarkMarkdown, renderLarkContinuationCard } from "./card-renderer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkChannelLike, LarkSendOptions } from "./types.js";
 
@@ -65,5 +65,5 @@ export function renderLarkCardFallbackText(fallbackText: string, locale: Locale,
   const detail = error instanceof Error && error.message
     ? locale === "en" ? `\n\nDetail: ${redactLarkErrorDetail(error)}` : `\n\n详情：${redactLarkErrorDetail(error)}`
     : "";
-  return [fallbackText.trim(), hint].filter(Boolean).join("\n\n") + detail;
+  return [normalizeLarkMarkdown(fallbackText).trim(), hint].filter(Boolean).join("\n\n") + detail;
 }

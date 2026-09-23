@@ -445,6 +445,12 @@ export async function runLarkService(
           botOpenId: () => (channel as unknown as { botIdentity?: { openId?: string } }).botIdentity?.openId,
           botName: () => (channel as unknown as { botIdentity?: { name?: string } }).botIdentity?.name,
           locale: () => (instanceConfig.locale === "zh" ? "zh" : "en"),
+          agentInstructions: () => larkAgentInstructions({
+            engine: instanceConfig.engine,
+            claudeChrome: instanceConfig.claudeChrome,
+            timezone: instanceConfig.timezone,
+            context: "meeting",
+          }),
           meetingChatId: (session) => stableLarkNumericId(`lark:meeting:${session.meetingId}`),
           log: (message) => logger.log(`${new Date().toISOString()} ${message}`),
         });

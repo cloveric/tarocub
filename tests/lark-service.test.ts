@@ -10982,7 +10982,7 @@ describe("lark service", () => {
     }
   });
 
-  it("delivers Codex generated_images tags and collapses repeated sandbox refusals into one notice", async () => {
+  it("repairs a mixed generated_images response before any partial delivery", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-genimg-"));
     const codexHome = await mkdtemp(path.join(os.tmpdir(), "cctb-codex-home-"));
     const genDir = path.join(codexHome, "generated_images", "session-1");
@@ -11025,18 +11025,19 @@ describe("lark service", () => {
       });
 
       const calls = channel.send.mock.calls as unknown as unknown[][];
-      // The engine-generated image goes out (image or file-fallback payload).
+      // Mixed valid/invalid batches are atomic: no sibling is delivered before
+      // the engine gets one repair turn.
       const mediaCalls = calls.filter((c) => {
         const payload = c[1] as { image?: unknown; file?: unknown; card?: unknown } | undefined;
         return Boolean(payload?.image || payload?.file || payload?.card);
       });
-      expect(mediaCalls.length).toBeGreaterThan(0);
-      // The symlink escape and the two outside paths are refused — but the
-      // identical lecture is posted ONCE, not three times.
-      const refusalTexts = calls
-        .map((c) => (c[1] as { text?: string } | undefined)?.text)
-        .filter((text): text is string => Boolean(text && text.includes("不在允许发送的目录内")));
-      expect(refusalTexts.length).toBe(1);
+      expect(mediaCalls).toHaveLength(1); // the run card only, never an artifact
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ text: expect.stringContaining("Delivery preflight retry") }),
+      );
+      expectLarkFinalAnswer(channel, "交付失败");
       // The timeline still records every rejected path individually.
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       const rejected = timeline.filter((event) => event.type === "file.rejected");
@@ -11501,11 +11502,12 @@ describe("lark service", () => {
 
       const rendered = JSON.stringify(channel.send.mock.calls);
       expect(rendered).not.toContain("Done.");
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { text: "错误：飞书工具参数无效：send.file 需要 payload.path。" },
-        { replyTo: "om_invalid_send_file" },
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(bridge.handleAuthorizedMessage).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ text: expect.stringContaining("Delivery preflight retry") }),
       );
+      expectLarkFinalAnswer(channel, "invalid-directive");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -11538,11 +11540,9 @@ describe("lark service", () => {
       const rendered = JSON.stringify(channel.send.mock.calls);
       expect(rendered).not.toContain("Done.");
       expect(rendered).not.toContain("错误：");
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { text: "Invalid Lark tool payload: send.file requires payload.path." },
-        { replyTo: "om_invalid_send_file_en" },
-      );
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expectLarkFinalAnswer(channel, "Delivery failed");
+      expectLarkFinalAnswer(channel, "invalid-directive");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -11571,11 +11571,8 @@ describe("lark service", () => {
 
       const rendered = JSON.stringify(channel.send.mock.calls);
       expect(rendered).not.toContain("Batch ready.");
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { text: "错误：飞书工具参数无效：send.batch files 必须是路径字符串或 {path, caption} 对象。" },
-        { replyTo: "om_invalid_send_batch" },
-      );
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expectLarkFinalAnswer(channel, "invalid-directive");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -11604,11 +11601,8 @@ describe("lark service", () => {
 
       const rendered = JSON.stringify(channel.send.mock.calls);
       expect(rendered).not.toContain("Media ready.");
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { text: "错误：飞书工具参数无效：send.batch videos 必须是字符串数组。" },
-        { replyTo: "om_invalid_media_batch" },
-      );
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expectLarkFinalAnswer(channel, "invalid-directive");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -11637,11 +11631,8 @@ describe("lark service", () => {
 
       const rendered = JSON.stringify(channel.send.mock.calls);
       expect(rendered).not.toContain("都已发出");
-      expect(channel.send).toHaveBeenCalledWith(
-        "oc_chat",
-        { text: "错误：tool tag JSON 格式无效，未执行。批量文件或长文本请改用 fenced tool-call 代码块。" },
-        { replyTo: "om_malformed_tool" },
-      );
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expectLarkFinalAnswer(channel, "invalid-directive");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
