@@ -46,6 +46,7 @@ export const ConfigFileSchema = z.object({
   budgetUsd: z.number().positive().optional(),
   effort: z.enum(EFFORT_LEVELS).optional(),
   model: z.string().optional(),
+  claudeChrome: z.boolean().optional(),
   codexServiceTier: z.literal("fast").optional(),
   larkElementStream: z.boolean().optional(),
   disableRuntimeTimeout: z.boolean().optional(),

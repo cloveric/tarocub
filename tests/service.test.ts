@@ -241,8 +241,28 @@ describe("createServiceDependenciesForInstance", () => {
         await expect(readInstanceRuntimeConfig(configPath)).resolves.toMatchObject({
           engine,
           approvalMode: engine === "kimi" ? "full-auto" : "bypass",
+          claudeChrome: false,
         });
       }
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("enables Claude's native Chrome integration only when configured", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "codex-telegram-channel-"));
+    const configPath = path.join(root, "config.json");
+
+    try {
+      await writeFile(configPath, JSON.stringify({
+        engine: "claude",
+        claudeChrome: true,
+      }) + "\n", "utf8");
+
+      await expect(readInstanceRuntimeConfig(configPath)).resolves.toMatchObject({
+        engine: "claude",
+        claudeChrome: true,
+      });
     } finally {
       await removeTempRoot(root);
     }

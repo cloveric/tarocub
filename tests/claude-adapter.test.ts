@@ -90,7 +90,7 @@ describe("ProcessClaudeAdapter", () => {
     });
   });
 
-  it("builds a Claude invocation with instructions, workspace, and resume", async () => {
+  it("builds a Claude invocation with Chrome, instructions, workspace, and resume", async () => {
     const { child, calls, spawnFn } = createSpawnHarness();
     const root = await mkdtemp(path.join(os.tmpdir(), "cc-telegram-bridge-"));
     const instructionsPath = path.join(root, "agent.md");
@@ -105,6 +105,7 @@ describe("ProcessClaudeAdapter", () => {
         instructionsPath,
         configPath,
         workspacePath,
+        enableChromeIntegration: true,
       });
 
       const promise = adapter.sendUserMessage("session-123", {
@@ -118,6 +119,7 @@ describe("ProcessClaudeAdapter", () => {
         "--verbose",
         "--output-format",
         "stream-json",
+        "--chrome",
         "-r",
         "session-123",
         "--permission-mode",
@@ -177,6 +179,7 @@ describe("ProcessClaudeAdapter", () => {
       expect(calls[0]?.args).not.toContain("--disallowedTools");
       expect(calls[0]?.args).not.toContain("AskUserQuestion");
       expect(calls[0]?.args).not.toContain("bypassPermissions");
+      expect(calls[0]?.args).not.toContain("--chrome");
     } finally {
       await removeTempRoot(root);
     }

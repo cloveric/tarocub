@@ -576,6 +576,7 @@ export async function readInstanceRuntimeConfig(configPath: string): Promise<{
   engine: EngineType;
   approvalMode: ApprovalMode;
   codexRuntime: CodexRuntime | undefined;
+  claudeChrome: boolean;
 }> {
   const parsed = await readValidatedConfigFile(configPath);
   const engine = parsed.engine === "claude" || parsed.engine === "antigravity" || parsed.engine === "kimi" || parsed.engine === "deepseek"
@@ -593,6 +594,7 @@ export async function readInstanceRuntimeConfig(configPath: string): Promise<{
       parsed.codexRuntime === "process" || parsed.codexRuntime === "app-server"
         ? parsed.codexRuntime
         : undefined,
+    claudeChrome: parsed.claudeChrome === true,
   };
 }
 
@@ -846,6 +848,7 @@ async function createAdapter(
       instructionsPath,
       configPath,
       workspacePath,
+      enableChromeIntegration: runtimeConfig.claudeChrome,
       disallowedTools: options.transport === "lark" ? [] : ["AskUserQuestion"],
     });
   }

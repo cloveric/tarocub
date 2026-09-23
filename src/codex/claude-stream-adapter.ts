@@ -627,6 +627,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
   private readonly backgroundTaskSilentSuppressMs: number;
   private readonly taskNotificationStartGraceMs: number;
   private readonly disallowedTools: string[];
+  private readonly enableChromeIntegration: boolean;
   private readonly idleSweepTimer: ReturnType<typeof setInterval> | undefined;
   private readonly workers = new Map<string, ClaudeWorker>();
   private destroyPromise: Promise<void> | undefined;
@@ -647,6 +648,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       backgroundTaskSilentSuppressMs?: number;
       taskNotificationStartGraceMs?: number;
       disallowedTools?: string[];
+      enableChromeIntegration?: boolean;
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -673,6 +675,7 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       options?.taskNotificationStartGraceMs ?? DEFAULT_TASK_NOTIFICATION_START_GRACE_MS,
     );
     this.disallowedTools = options?.disallowedTools ?? [];
+    this.enableChromeIntegration = options?.enableChromeIntegration === true;
 
     const sweepIntervalMs = options?.idleSweepIntervalMs ?? DEFAULT_IDLE_SWEEP_INTERVAL_MS;
     if (this.idleWorkerTtlMs > 0 && sweepIntervalMs > 0) {
@@ -860,6 +863,9 @@ export class ClaudeStreamAdapter implements CodexAdapter {
       "--permission-prompt-tool",
       "stdio",
     ];
+    if (this.enableChromeIntegration) {
+      args.push("--chrome");
+    }
     for (const toolName of this.disallowedTools) {
       args.push("--disallowedTools", toolName);
     }

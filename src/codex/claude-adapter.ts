@@ -227,6 +227,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
   private readonly configPath: string | undefined;
   private readonly workspacePath: string | undefined;
   private readonly disallowedTools: string[];
+  private readonly enableChromeIntegration: boolean;
 
   constructor(
     private readonly claudeExecutable: string,
@@ -238,6 +239,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
       workspacePath?: string;
       engineHomePath?: string;
       disallowedTools?: string[];
+      enableChromeIntegration?: boolean;
     },
   ) {
     this.childEnv = options?.childEnv ?? (() => {
@@ -258,6 +260,7 @@ export class ProcessClaudeAdapter implements CodexAdapter {
     this.configPath = options?.configPath;
     this.workspacePath = options?.workspacePath;
     this.disallowedTools = options?.disallowedTools ?? [];
+    this.enableChromeIntegration = options?.enableChromeIntegration === true;
   }
 
   async createSession(chatId: number): Promise<CodexSessionHandle> {
@@ -333,6 +336,9 @@ export class ProcessClaudeAdapter implements CodexAdapter {
 
     // Build args
     const args: string[] = ["-p", "--verbose", "--output-format", "stream-json"];
+    if (this.enableChromeIntegration) {
+      args.push("--chrome");
+    }
 
     // Resume existing session
     if (!isLogicalTelegramSessionId(sessionId)) {

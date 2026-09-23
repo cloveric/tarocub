@@ -325,6 +325,8 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("read them directly with `web_extract`");
     expect(instructions).toContain("fall back to Scrapling");
     expect(instructions).toContain("`web_search` for discovery/current facts");
+    expect(instructions).toContain("signed-in tasks → main Chrome");
+    expect(instructions).toContain("9222/9223 only per named skill");
     // DeepSeek-only MCP tool names live in the DeepSeek Harness adapter's own
     // instruction preamble, not in this every-turn shared prompt (budget).
     expect(instructions).not.toContain("mcp__cctb_search__");

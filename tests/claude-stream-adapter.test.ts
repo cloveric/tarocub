@@ -149,10 +149,11 @@ describe("ClaudeStreamAdapter", () => {
     await expect(turn).resolves.toEqual({ text: "FINAL", sessionId: "session-final" });
   });
 
-  it("keeps a persistent Claude session alive across multiple turns", async () => {
+  it("keeps a Chrome-enabled persistent Claude session alive across multiple turns", async () => {
     const { children, calls, spawnFn } = createSpawnHarness();
     const adapter = new ClaudeStreamAdapter("claude", {
       spawnFn,
+      enableChromeIntegration: true,
     });
 
     const first = adapter.sendUserMessage("telegram-12345", {
@@ -171,6 +172,7 @@ describe("ClaudeStreamAdapter", () => {
       "--forward-subagent-text",
       "--permission-prompt-tool",
       "stdio",
+      "--chrome",
     ]);
     children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
     children[0].stdout.emitData('{"type":"assistant","message":{"content":[{"type":"text","text":"ONE"}]},"session_id":"session-123"}\n');
@@ -218,6 +220,7 @@ describe("ClaudeStreamAdapter", () => {
       await waitFor(() => children.length === 1 && children[0].stdin.lines.length === 1);
       expect(calls[0]?.args).toContain("--dangerously-skip-permissions");
       expect(calls[0]?.args).not.toContain("bypassPermissions");
+      expect(calls[0]?.args).not.toContain("--chrome");
 
       children[0].stdout.emitData('{"type":"system","subtype":"init","session_id":"session-123"}\n');
       children[0].stdout.emitData('{"type":"result","subtype":"success","is_error":false,"result":"ONE","session_id":"session-123"}\n');

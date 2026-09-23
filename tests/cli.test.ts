@@ -454,6 +454,7 @@ describe("runCli", () => {
         path.join(stateDir, "config.json"),
         JSON.stringify({
           engine: "claude",
+          claudeChrome: true,
           locale: "en",
         }),
         "utf8",
@@ -474,6 +475,7 @@ describe("runCli", () => {
       expect(output).toContain("Engine: claude");
       expect(output).toContain("Model: default (Claude CLI default; no --model override)");
       expect(output).toContain("Effort: default (Claude CLI default; no --effort override)");
+      expect(output).toContain("Claude Chrome: on");
     } finally {
       await removeTempRoot(tempDir);
     }

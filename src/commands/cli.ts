@@ -650,6 +650,7 @@ async function inspectLarkOperationalStatus(
       "Engine: unknown",
       "Model: unknown",
       "Effort: unknown",
+      "Claude Chrome: unknown",
       "Codex Fast Mode: unknown",
       "Approval mode: unknown",
       "Budget: unknown",
@@ -696,6 +697,7 @@ async function inspectLarkOperationalStatus(
     `Engine: ${cfg?.engine ?? "unknown"}`,
     `Model: ${cfg ? renderEngineModelSetting(cfg.engine, cfg.model, codexDefaults, "en") : "unknown"}`,
     `Effort: ${cfg ? renderEngineEffortSetting(cfg.engine, cfg.effort, codexDefaults, "en") : "unknown"}`,
+    `Claude Chrome: ${cfg ? (cfg.engine === "claude" ? (rawConfig.claudeChrome === true ? "on" : "off") : "n/a") : "unknown"}`,
     `Codex Fast Mode: ${cfg ? (cfg.codexServiceTier === "fast" ? "on" : "off") : "unknown"}`,
     `Approval mode: ${cfg ? renderApprovalModeStatus(
       cfg.engine,
