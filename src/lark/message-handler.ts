@@ -1093,7 +1093,7 @@ function announcesUpcomingLarkAttachment(text: string): boolean {
   }
 
   const attachment = "(?:截图|图片?|照片|文件|附件|文档|表格|压缩包|视频|音频|录音)";
-  const send = "(?:发(?!现|布|票|生|挥|明|起|热|言)|传|上传|补发|贴)";
+  const send = "(?:发(?!现|布|票|生|挥|明|起|热|言|的)|传|上传|补发|贴)";
   const chineseTimedAnnouncement = new RegExp(
     `(?:马上|待会儿?|等会儿?|等下|稍后|随后|接着|下一(?:条|个)|下条|一会儿?|这就|我(?:会|准备|打算|马上|待会儿?|等会儿?|等下|稍后|随后|接着|先|再|这就)).{0,8}${send}.{0,16}${attachment}`,
   );

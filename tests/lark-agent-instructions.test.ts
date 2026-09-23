@@ -221,7 +221,7 @@ describe("larkAgentInstructions", () => {
     const instructions = larkAgentInstructions();
 
     expect(instructions).toContain("workspace-sandboxed");
-    expect(instructions).toContain("copy it into your workspace first");
+    expect(instructions).toContain("copy outside files into workspace first");
   });
 
   it("tells background jobs to validate output and emit delivery tags", () => {
@@ -284,7 +284,7 @@ describe("larkAgentInstructions", () => {
   it("tells agents to answer ordinary Lark requests directly instead of emitting placeholder cards", () => {
     const instructions = larkAgentInstructions();
 
-    expect(instructions).toContain("concise text reply");
+    expect(instructions).toContain("concise text");
     expect(instructions).toContain("no progress placeholder cards");
     expect(instructions).toContain("send.batch");
     expect(instructions).toContain("fenced `file:name.ext`");
@@ -321,11 +321,16 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("only explicit reminder/schedule requests");
     expect(instructions).toContain("ISO timezone");
 
-    // Web routing mirrors the Telegram transport rules, plus the Scrapling fallback.
-    expect(instructions).toContain("read them directly with `web_extract`");
-    expect(instructions).toContain("fall back to Scrapling");
-    expect(instructions).toContain("`web_search` for discovery/current facts");
-    expect(instructions).toContain("signed-in tasks → main Chrome");
+    // Only Claude exposes the native signed-in Chrome integration. Other
+    // engines must use the web tools they actually have instead of being sent
+    // to a nonexistent shared browser capability.
+    expect(instructions).toContain("Claude main Chrome only");
+    expect(instructions).toContain("signed-in tasks");
+    expect(instructions).toContain("others use own web tools");
+    expect(instructions).toContain("`web_extract`/browser");
+    expect(instructions).toContain("blocked: Scrapling");
+    expect(instructions).toContain("else `web_search`");
+    expect(instructions).toContain("disclose use and cite links");
     expect(instructions).toContain("9222/9223 only per named skill");
     // DeepSeek-only MCP tool names live in the DeepSeek Harness adapter's own
     // instruction preamble, not in this every-turn shared prompt (budget).

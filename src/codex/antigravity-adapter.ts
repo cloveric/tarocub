@@ -97,6 +97,7 @@ type AntigravityPendingTurn = {
   resultText: string;
   resultSeen: boolean;
   finalAgentResponseSeen: boolean;
+  toolSeenAfterFinalAgentResponse: boolean;
   stepUsage: Map<number, AdapterUsage>;
   emittedTools: Set<number>;
   completedTools: Set<number>;
@@ -304,8 +305,9 @@ function hasCompletedAntigravityAnswer(
   response: unknown,
   streamedText: string,
   finalAgentResponseSeen: boolean,
+  toolSeenAfterFinalAgentResponse: boolean,
 ): boolean {
-  if (!finalAgentResponseSeen) {
+  if (!finalAgentResponseSeen || toolSeenAfterFinalAgentResponse) {
     return false;
   }
   const responseText = typeof response === "string" ? response : "";
@@ -736,6 +738,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
         resultText: "",
         resultSeen: false,
         finalAgentResponseSeen: false,
+        toolSeenAfterFinalAgentResponse: false,
         stepUsage: new Map(),
         emittedTools: new Set(),
         completedTools: new Set(),
@@ -864,6 +867,10 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       }
       if (step.step_type === "agent_response" && step.state === "DONE") {
         pending.finalAgentResponseSeen = true;
+        pending.toolSeenAfterFinalAgentResponse = false;
+      }
+      if (step.step_type === "tool" && pending.finalAgentResponseSeen) {
+        pending.toolSeenAfterFinalAgentResponse = true;
       }
       if (step.step_type === "tool" && index !== undefined) {
         const info = (asRecord(step.tool_info) ?? {}) as AntigravityToolInfo;
@@ -903,7 +910,12 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       const status = typeof result.status === "string" ? result.status : "UNKNOWN";
       if (
         status !== "SUCCESS"
-        && !hasCompletedAntigravityAnswer(result.response, pending.streamedText, pending.finalAgentResponseSeen)
+        && !hasCompletedAntigravityAnswer(
+          result.response,
+          pending.streamedText,
+          pending.finalAgentResponseSeen,
+          pending.toolSeenAfterFinalAgentResponse,
+        )
       ) {
         const message = stringifyToolValue(result.error) ?? `Antigravity result status: ${status}`;
         throw new Error(message);
@@ -1224,6 +1236,7 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
       let initSeen = false;
       let resultSeen = false;
       let finalAgentResponseSeen = false;
+      let toolSeenAfterFinalAgentResponse = false;
       const stdoutDecoder = new StringDecoder("utf8");
       const stderrDecoder = new StringDecoder("utf8");
       const stepUsage = new Map<number, AdapterUsage>();
@@ -1378,6 +1391,10 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           }
           if (step.step_type === "agent_response" && step.state === "DONE") {
             finalAgentResponseSeen = true;
+            toolSeenAfterFinalAgentResponse = false;
+          }
+          if (step.step_type === "tool" && finalAgentResponseSeen) {
+            toolSeenAfterFinalAgentResponse = true;
           }
           if (step.step_type === "tool" && index !== undefined) {
             const info = (asRecord(step.tool_info) ?? {}) as AntigravityToolInfo;
@@ -1412,7 +1429,12 @@ export class ProcessAntigravityAdapter implements CodexAdapter {
           const status = typeof result.status === "string" ? result.status : "UNKNOWN";
           if (
             status !== "SUCCESS"
-            && !hasCompletedAntigravityAnswer(result.response, streamedText, finalAgentResponseSeen)
+            && !hasCompletedAntigravityAnswer(
+              result.response,
+              streamedText,
+              finalAgentResponseSeen,
+              toolSeenAfterFinalAgentResponse,
+            )
           ) {
             const message = stringifyToolValue(result.error) ?? `Antigravity result status: ${status}`;
             throw new Error(message);

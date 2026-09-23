@@ -44,6 +44,9 @@ export function renderLarkUserFacingError(
   const isModelCapacity =
     category === "engine-backend" &&
     /(?:selected model is at capacity|no capacity available for model)/i.test(errorText);
+  const timeoutMatch = errorText.match(/turn (timed out|became inactive) after\s+(\d+(?:\.\d+)?)\s*minute/i);
+  const timeoutMinutes = timeoutMatch?.[2];
+  const isInactivityTimeout = timeoutMatch?.[1]?.toLowerCase() === "became inactive";
   if (category === "engine-thread-locked") {
     // The adapter already produced an operator-actionable explanation (who
     // holds the lock, what to do). Surfacing it verbatim is the whole point —
@@ -81,13 +84,19 @@ export function renderLarkUserFacingError(
         ? "Error: the selected model is temporarily at capacity. Retry shortly or switch models; restarting the instance is not required."
         : "Error: the model backend is temporarily overloaded or disconnected. Please retry; restarting the instance is not required.";
     }
+    if (category === "engine-rate-limit") {
+      return "Error: the model service is rate-limiting requests. Wait briefly and retry; resetting the chat or restarting the instance will not help.";
+    }
     if (category === "engine-quota") {
       return isKimiQuota
         ? "Error: Kimi's current 5-hour usage quota is exhausted. Wait for the usage window to reset, or purchase extra usage/upgrade; signing in again or restarting will not help."
         : "Error: the engine usage quota is exhausted. Wait for the quota window to reset or increase the account quota; signing in again or restarting will not help.";
     }
     if (category === "engine-timeout") {
-      return "⏱️ This turn hit the single-turn time cap (60 min) and was stopped — not a crash, so restarting won't help. For a genuinely long task, send `/timeout off` to lift the cap and rerun, or split it into smaller steps.";
+      const duration = timeoutMinutes ? `${timeoutMinutes} minutes` : "the configured interval";
+      return isInactivityTimeout
+        ? `⏱️ This turn produced no engine output for ${duration} and was stopped by the inactivity watchdog. It was not a crash; split the task or send \`/timeout off\` before a genuinely long silent operation.`
+        : `⏱️ This turn hit its ${duration} runtime cap and was stopped. It was not a crash; split the task or send \`/timeout off\` before rerunning a genuinely long task.`;
     }
 
     switch (phase) {
@@ -126,13 +135,19 @@ export function renderLarkUserFacingError(
       ? "错误：所选模型当前容量已满。请稍后重试，或临时切换模型；无需重启实例。"
       : "错误：模型后端暂时过载或连接中断，请重试；无需重启实例。";
   }
+  if (category === "engine-rate-limit") {
+    return "错误：模型服务当前触发限流。请稍等后重试；重置聊天或重启实例都无效。";
+  }
   if (category === "engine-quota") {
     return isKimiQuota
       ? "错误：Kimi 当前 5 小时使用额度已用完。请等待额度窗口重置，或购买额外额度/升级套餐；重新登录或重启都无效。"
       : "错误：引擎使用额度已用完。请等待额度窗口重置或提高账户额度；重新登录或重启都无效。";
   }
   if (category === "engine-timeout") {
-    return "⏱️ 本轮撞了单轮 60 分钟时间上限被自动终止——不是崩溃，重启没用。任务确实很长的话，发 `/timeout off` 放开上限后重跑，或把任务拆小。";
+    const duration = timeoutMinutes ? `${timeoutMinutes} 分钟` : "配置的时限";
+    return isInactivityTimeout
+      ? `⏱️ 本轮连续 ${duration}没有引擎输出，已被空闲看门狗停止；这不是崩溃。请拆分任务，或在确实需要长时间静默运行前发送 \`/timeout off\`。`
+      : `⏱️ 本轮达到${duration}运行上限，已自动停止；这不是崩溃。请拆分任务，或在重跑真正的长任务前发送 \`/timeout off\`。`;
   }
 
   switch (phase) {

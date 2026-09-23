@@ -532,7 +532,9 @@ export function renderCategorizedErrorMessage(
       normalizedDetail.includes("telegram attachment is too large to download via bot api") ||
       normalizedDetail.includes("getfile: bad request: file is too big")
     );
-  const timeoutMinutes = detail.match(/(?:timed out|became inactive) after\s+(\d+)\s*minute/i)?.[1];
+  const timeoutMatch = detail.match(/turn (timed out|became inactive) after\s+(\d+(?:\.\d+)?)\s*minute/i);
+  const timeoutMinutes = timeoutMatch?.[2];
+  const isInactivityTimeout = timeoutMatch?.[1]?.toLowerCase() === "became inactive";
 
   if (locale === "zh") {
     if (category === "write-permission") {
@@ -557,6 +559,9 @@ export function renderCategorizedErrorMessage(
         ? "错误：所选模型当前容量已满。请稍后重试，或临时切换模型；无需重启实例。"
         : "错误：引擎服务暂时过载或连接中断，请稍后再试；无需重启实例。";
     }
+    if (category === "engine-rate-limit") {
+      return "错误：模型服务当前触发限流。请稍等后重试；重置聊天或重启实例都无效。";
+    }
     if (category === "engine-quota") {
       return engine === "kimi"
         ? "错误：Kimi 当前 5 小时使用额度已用完。请等待额度窗口重置，或购买额外额度/升级套餐；重新登录或重启都无效。"
@@ -564,7 +569,9 @@ export function renderCategorizedErrorMessage(
     }
     if (category === "engine-timeout") {
       const duration = timeoutMinutes ? `${timeoutMinutes} 分钟` : "配置的时限";
-      return `错误：任务达到${duration}上限或长时间无响应，已自动停止。直接原样重试通常还会超时；请拆分任务，或先用 \`/timeout\` 调整时限。`;
+      return isInactivityTimeout
+        ? `错误：任务连续 ${duration}没有引擎输出，已被空闲看门狗停止。请拆分任务，或先用 \`/timeout\` 调整时限。`
+        : `错误：任务达到${duration}运行上限，已自动停止。直接原样重试通常还会超时；请拆分任务，或先用 \`/timeout\` 调整时限。`;
     }
     if (category === "engine-cli") {
       if (isUnsupportedAntigravityFlag) {
@@ -615,6 +622,9 @@ export function renderCategorizedErrorMessage(
       ? "Error: The selected model is temporarily at capacity. Retry shortly or switch models; restarting the instance is not required."
       : "Error: The engine backend is temporarily overloaded or disconnected. Retry later; restarting the instance is not required.";
   }
+  if (category === "engine-rate-limit") {
+    return "Error: The model service is rate-limiting requests. Wait briefly and retry; resetting the chat or restarting the instance will not help.";
+  }
   if (category === "engine-quota") {
     return engine === "kimi"
       ? "Error: Kimi's current 5-hour usage quota is exhausted. Wait for the usage window to reset, or purchase extra usage/upgrade; signing in again or restarting will not help."
@@ -622,7 +632,9 @@ export function renderCategorizedErrorMessage(
   }
   if (category === "engine-timeout") {
     const duration = timeoutMinutes ? `${timeoutMinutes}-minute` : "configured";
-    return `Error: The task hit the ${duration} runtime/inactivity limit and was stopped. Retrying unchanged will likely time out again; split the task or adjust \`/timeout\` first.`;
+    return isInactivityTimeout
+      ? `Error: The task produced no engine output for the ${duration} inactivity interval and was stopped. Split the task or adjust \`/timeout\` first.`
+      : `Error: The task hit the ${duration} runtime limit and was stopped. Retrying unchanged will likely time out again; split the task or adjust \`/timeout\` first.`;
   }
   if (category === "engine-cli") {
     if (isUnsupportedAntigravityFlag) {

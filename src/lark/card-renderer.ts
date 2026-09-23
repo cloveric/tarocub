@@ -1505,9 +1505,36 @@ const LARK_INLINE_MATH_SYMBOLS: Readonly<Record<string, string>> = {
   geq: "≥",
   pm: "±",
   infty: "∞",
+  alpha: "α",
+  beta: "β",
+  gamma: "γ",
+  theta: "θ",
+  lambda: "λ",
+  mu: "μ",
+  pi: "π",
+  rho: "ρ",
+  sigma: "σ",
+  tau: "τ",
+  phi: "φ",
+  omega: "ω",
+  Gamma: "Γ",
   Delta: "Δ",
+  Theta: "Θ",
+  Lambda: "Λ",
+  Pi: "Π",
+  Sigma: "Σ",
+  Phi: "Φ",
+  Omega: "Ω",
   delta: "δ",
+  sum: "∑",
+  prod: "∏",
+  int: "∫",
 };
+
+const LARK_INLINE_MATH_COMMAND_RE = new RegExp(
+  `\\\\(${Object.keys(LARK_INLINE_MATH_SYMBOLS).sort((left, right) => right.length - left.length).join("|")})\\b`,
+  "g",
+);
 
 const LARK_SUPPORTED_MATH_COMMANDS = new Set([
   ...Object.keys(LARK_INLINE_MATH_SYMBOLS),
@@ -1567,7 +1594,7 @@ function normalizeLarkMathBody(body: string): string {
 
   output = output
     .replace(/\\(?:left|right)\b/g, "")
-    .replace(/\\(rightarrow|Rightarrow|leftarrow|Leftarrow|leftrightarrow|Leftrightarrow|to|div|times|cdot|approx|sim|neq|ne|leq|le|geq|ge|pm|infty|Delta|delta)\b/g, (_match, command: string) => (
+    .replace(LARK_INLINE_MATH_COMMAND_RE, (_match, command: string) => (
       LARK_INLINE_MATH_SYMBOLS[command] ?? command
     ))
     .replace(/\\[,;:!]\s*/g, " ")
@@ -1588,8 +1615,17 @@ function normalizeUnsupportedLarkMath(text: string): string {
   return text
     .replace(/\$\$([^$\n]+)\$\$/g, render())
     // Paired dollar signs are also used for currency. Only treat the inline
-    // form as math when it contains an actual TeX command.
-    .replace(/\$([^$\n]*\\[A-Za-z]+[^$\n]*)\$/g, render(true))
+    // form as math when it contains an actual TeX command. If the closing
+    // delimiter is immediately followed by a digit, both dollar signs are
+    // currency prefixes around a TeX arrow (for example "$5 \\to $10").
+    .replace(/\$([^$\n]*\\[A-Za-z]+[^$\n]*)\$/g, (match, body: string, offset: number, source: string) => {
+      if (!canNormalizeLarkMath(body, true)) return match;
+      const next = source[offset + match.length] ?? "";
+      if (/^\s*\d/.test(body) && /\d/.test(next)) {
+        return `$${normalizeLarkMathBody(body)} $`;
+      }
+      return normalizeLarkMathBody(body);
+    })
     .replace(/\\\(([^\n]+?)\\\)/g, render())
     .replace(/\\\[([^\n]+?)\\\]/g, render());
 }

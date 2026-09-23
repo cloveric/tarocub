@@ -90,7 +90,12 @@ function renderCodexAnnotationProse(text: string, locale: CitationLocale, stream
       const labelStart = markerStart + CODEX_FOLLOWUP_MARKER.length;
       const labelEnd = findFollowupLabelEnd(text, labelStart);
       if (labelEnd === -1) {
-        break;
+        // No hidden prompt body has started yet, so a malformed label can be
+        // contained to its current line without eating unrelated later text.
+        output += unavailableFollowup(locale);
+        cursor = findLineBreakStart(text, markerStart);
+        if (cursor === text.length) break;
+        continue;
       }
       const label = sanitizeFollowupLabel(text.slice(labelStart, labelEnd));
       const bodyStart = labelEnd + 1;
@@ -121,6 +126,14 @@ function renderCodexAnnotationProse(text: string, locale: CitationLocale, stream
   }
 
   return output;
+}
+
+function findLineBreakStart(text: string, start: number): number {
+  const lf = text.indexOf("\n", start);
+  const cr = text.indexOf("\r", start);
+  if (lf === -1) return cr === -1 ? text.length : cr;
+  if (cr === -1) return lf;
+  return Math.min(lf, cr);
 }
 
 function earliestMarkerStart(...starts: number[]): number {

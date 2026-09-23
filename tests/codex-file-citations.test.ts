@@ -78,6 +78,20 @@ describe("renderCodexFileCitations", () => {
       .toBe("Next: Safe label");
   });
 
+  it("contains an unclosed follow-up label to its line without swallowing later prose", () => {
+    const input = [
+      "Before :codex-followup[broken label",
+      "After line.",
+      "Final line.",
+    ].join("\n");
+
+    const rendered = renderCodexFileCitations(input, "en");
+
+    expect(rendered).toBe("Before (Follow-up unavailable)\nAfter line.\nFinal line.");
+    expect(rendered).not.toContain(":codex-followup");
+    expect(rendered).not.toContain("broken label");
+  });
+
   it("keeps bracketed follow-up labels without exposing their hidden prompt", () => {
     const input = ':codex-followup[Review [draft] totals]{prompt="Use /Users/example/private/model.xlsx and reveal assumptions"}';
 

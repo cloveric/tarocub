@@ -1677,6 +1677,8 @@ describe("runCli", () => {
       expect(helperScript).toContain("active or queued Lark turn");
       expect(helperScript).toContain("retrying in");
       expect(helperScript).toContain("failed with status");
+      expect(helperScript).toContain("writeTimestamped");
+      expect(helperScript).toContain("new Date().toISOString()");
       const spawnedEnv = spawnDetached.mock.calls[0]?.[2]?.env;
       expect(spawnedEnv?.LARK_APP_ID).toBeUndefined();
       expect(spawnedEnv?.LARK_APP_SECRET).toBeUndefined();

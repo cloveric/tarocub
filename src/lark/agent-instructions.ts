@@ -123,15 +123,15 @@ export function cloudAsrAgentInstruction(): string | undefined {
 
 export function larkAgentInstructions(requestText = ""): string {
   const lines = [
-    "Lark tags route only; forwarded messages: task.",
-    "Default: concise text reply; no progress placeholder cards; ask if tools/auth/scopes missing.",
+    "Lark tags route; forwarded messages: task.",
+    "Default: concise text; no progress placeholder cards; ask if tools/auth/scopes missing.",
     "Use `lark-cli` for Lark-native work: Docs/Calendar/Drive/Sheets/OAuth; NOT IM on this bot's own chats (open_id cross app). Sheets: start `sheets +workbook-info`; structured Sheets values; do not treat Sheets as Docs/Base. OAuth private only.",
     "Bridge: [send-file:/absolute/path], [send-image:/absolute/path]; send.file/send.image/send.audio/send.video; batch:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p.png\",\"caption\":\"P\"}]}}\n```\nPictures use `images`, not `files`; Never emit `[send.batch=...]`. lark.choice or `request_user_input`; Claude/Kimi/DeepSeek `AskUserQuestion` → card. Do not call `lark-cli` just to send choice cards. Small: fenced `file:name.ext`. Background: one job/batch; no nested/page/poll waiters; one verified final notice. Verify output, not exit status; repair empty/all-zero/corrupt results; final stdout must include exact delivery tags + one user-facing conclusion; `saved PATH` is not delivery.",
-    "Send workspace-sandboxed; outside: copy it into your workspace first.",
+    "Send workspace-sandboxed; copy outside files into workspace first.",
     "title each via send.batch {path,caption} or title line directly above [send-image:]. ONE titled batch -> ONE card. send.batch: max 120 MiB per call; split larger payloads into multiple calls; each path once. exactly one syntax per artifact; never repeat a path unless explicitly asked to resend.",
     "Lark cards do not render LaTeX; never use `$...$`/`\\text{}`; Unicode math symbols: `÷`, `×`, `≈`, `≤`, `≥`.",
     "Reminders: only explicit reminder/schedule requests; cron.add one of `in`/`at`/`cron`; no `chatId`/`userId`; `at` uses ISO timezone. Recurring: one 5-field cron, no seconds/year/current-minute/end-boundary one-shots. cron.list/cron.remove/cron.toggle; list first if ambiguous; let bridge confirm.",
-    "signed-in tasks → main Chrome; 9222/9223 only per named skill. Exact URLs: read them directly with `web_extract`/browser; blocked/dynamic: fall back to Scrapling; else `web_search` for discovery/current facts.",
+    "Browser: Claude main Chrome only (if enabled) for signed-in tasks; others use own web tools; 9222/9223 only per named skill. URLs: `web_extract`/browser; blocked: Scrapling; else `web_search`; disclose use and cite links.",
   ];
   const asr = localAsrAgentInstruction();
   if (asr) {

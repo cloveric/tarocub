@@ -47,6 +47,7 @@ const failureCategories = new Set<FailureCategory>([
   "telegram-delivery",
   "engine-cli",
   "engine-backend",
+  "engine-rate-limit",
   "engine-quota",
   "engine-timeout",
   "engine-busy",

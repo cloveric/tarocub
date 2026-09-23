@@ -127,6 +127,19 @@ describe("classifyFailure specificity", () => {
     expect(renderLarkUserFacingError(err, "engine", "en")).toContain("model backend is temporarily overloaded or disconnected");
   });
 
+  it("classifies model-service 429 responses as retryable rate limits without stealing channel 429s", () => {
+    expect(classifyFailure(new Error("API Error: 429 Too Many Requests"))).toBe("engine-rate-limit");
+    expect(classifyFailure(new Error("api_error_status=429 rate limited"))).toBe("engine-rate-limit");
+    expect(classifyFailure(new Error("Codex HTTP status 429"))).toBe("engine-rate-limit");
+    expect(classifyFailure(new Error("Telegram API request failed: 429 Too Many Requests"))).toBe("telegram-delivery");
+    expect(getBusErrorSemantics("engine-rate-limit")).toEqual({ code: "engine_rate_limit", retryable: true });
+
+    const error = new Error("API Error: 429 Too Many Requests");
+    expect(renderLarkUserFacingError(error, "engine", "zh")).toContain("模型服务当前触发限流");
+    expect(renderLarkUserFacingError(error, "engine", "zh")).toContain("重启实例都无效");
+    expect(renderCategorizedErrorMessage("engine-rate-limit", error.message, "en")).toContain("rate-limiting");
+  });
+
   it("renders model-capacity failures with actionable retry guidance", () => {
     const err = new Error("Selected model is at capacity. Please try a different model.");
     const zh = renderLarkUserFacingError(err, "engine", "zh");
@@ -188,6 +201,25 @@ describe("classifyFailure specificity", () => {
     const en = renderLarkUserFacingError(err, "engine", "en");
     expect(en).toContain("/timeout off");
     expect(en).not.toContain("Restart the instance");
+  });
+
+  it("renders the actual Lark timeout duration and distinguishes inactivity from the hard cap", () => {
+    const hardCap = renderLarkUserFacingError(
+      new Error("Codex app-server turn timed out after 15 minutes"),
+      "engine",
+      "zh",
+    );
+    expect(hardCap).toContain("15 分钟");
+    expect(hardCap).toContain("运行上限");
+    expect(hardCap).not.toContain("60 分钟");
+
+    const inactive = renderLarkUserFacingError(
+      new Error("Claude turn became inactive after 30 minutes with no engine output"),
+      "engine",
+      "en",
+    );
+    expect(inactive).toContain("30 minutes");
+    expect(inactive).toContain("inactivity watchdog");
   });
 
   it("renders Telegram engine timeouts with /timeout guidance instead of blind retry advice", () => {
@@ -252,6 +284,7 @@ describe("getBusErrorSemantics", () => {
     expect(getBusErrorSemantics("telegram-conflict")).toEqual({ code: "telegram_conflict", retryable: true });
     expect(getBusErrorSemantics("workflow-state")).toEqual({ code: "workflow_state", retryable: false });
     expect(getBusErrorSemantics("engine-backend")).toEqual({ code: "engine_backend", retryable: true });
+    expect(getBusErrorSemantics("engine-rate-limit")).toEqual({ code: "engine_rate_limit", retryable: true });
     expect(getBusErrorSemantics("engine-quota")).toEqual({ code: "engine_quota", retryable: false });
     expect(getBusErrorSemantics("unknown")).toEqual({ code: "unknown", retryable: true });
   });

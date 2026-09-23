@@ -182,6 +182,14 @@ const retryDelayMs = 30_000;
 const maxWaitMs = 2 * 60 * 60 * 1000;
 const deadline = Date.now() + maxWaitMs;
 
+function writeTimestamped(stream, value) {
+  const output = String(value ?? "").replace(/\\r?\\n$/, "");
+  if (!output) return;
+  for (const line of output.split(/\\r?\\n/)) {
+    stream.write("[" + new Date().toISOString() + "] " + line + "\\n");
+  }
+}
+
 function runRestart() {
   const env = { ...process.env };
   for (const key of scrubKeys) {
@@ -201,8 +209,8 @@ function runRestart() {
     encoding: "utf8",
   });
 
-  if (result.stdout) process.stdout.write(result.stdout);
-  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.stdout) writeTimestamped(process.stdout, result.stdout);
+  if (result.stderr) writeTimestamped(process.stderr, result.stderr);
   if ((result.status ?? 1) === 0) {
     process.exit(0);
   }
@@ -213,7 +221,7 @@ function runRestart() {
     const reason = queueBusy
       ? "is waiting for the active turn to finish"
       : \`failed with status \${result.status ?? "unknown"}\`;
-    process.stderr.write(
+    writeTimestamped(process.stderr,
       \`Deferred restart for "\${instanceName}" \${reason}; retrying in \${Math.ceil(retryDelayMs / 1000)}s.\\n\`,
     );
     setTimeout(runRestart, retryDelayMs);

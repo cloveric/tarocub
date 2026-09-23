@@ -1337,6 +1337,12 @@ describe("lark service", () => {
       "我之前发的文件还在吗",
       "我要发给客户的文档帮我润色一下",
       "我发的表格第三列不对",
+      "马上帮我看下我发的文件",
+      "接着分析我发的截图",
+      "一会儿我发的截图你对比下上面那张",
+      "稍后发的文件记得汇总",
+      "我先发的那张截图和后面的有啥区别",
+      "我发给你的文件打不开",
     ];
 
     try {
@@ -3234,7 +3240,8 @@ describe("lark service", () => {
 
       await vi.waitFor(() => expect(channel.recallMessage).toHaveBeenCalledWith("sent_1"));
       const acceptedCard = JSON.stringify(channel.send.mock.calls);
-      expect(acceptedCard).toContain("已开始深入分析");
+      expect(acceptedCard).toContain("已收到继续请求");
+      expect(acceptedCard).toContain("正在检查压缩包状态");
       expect(acceptedCard).not.toContain('"tag":"button"');
       expect(acceptedCard).not.toContain('"cctb_lark":"continue_archive"');
       expect(runtime.choiceCards.get("sent_1")).toMatchObject({
@@ -14265,6 +14272,10 @@ describe("lark service", () => {
       await vi.waitFor(() => expect(runtime.chatQueue.isBusy("lark:oc_chat")).toBe(false));
 
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
+      const sent = JSON.stringify(channel.send.mock.calls);
+      expect(sent).toContain("已收到继续请求");
+      expect(sent).toMatch(/已不在等待继续分析|no longer waiting/);
+      expect(sent).not.toContain("已开始深入分析");
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({
         type: "turn.completed",

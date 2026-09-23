@@ -7,6 +7,7 @@ export type FailureCategory =
   | "telegram-delivery"
   | "engine-cli"
   | "engine-backend"
+  | "engine-rate-limit"
   | "engine-quota"
   | "engine-timeout"
   | "engine-busy"
@@ -102,6 +103,19 @@ export function classifyFailure(error: unknown): FailureCategory {
     text.includes("billing hard limit has been reached")
   ) {
     return "engine-quota";
+  }
+
+  const isChannelRateLimit = /\b(?:telegram|lark|feishu)\b/.test(text);
+  if (
+    !isChannelRateLimit
+    && (
+      /\bapi(?:_| )error(?:_| )status\s*[:=]\s*429\b/.test(text)
+      || /\bapi error\s*:\s*429\b/.test(text)
+      || (/\b429\b/.test(text) && /\b(?:rate limit(?:ed|ing)?|too many requests|resource[_ ]exhausted)\b/.test(text))
+      || (NAMED_ENGINE_RE.test(text) && /\b(?:http\s*)?(?:status(?: code)?\s*[:=]?\s*)?429\b/.test(text))
+    )
+  ) {
+    return "engine-rate-limit";
   }
 
   if (
@@ -255,6 +269,8 @@ export function getBusErrorSemantics(failureCategory: FailureCategory): BusError
       return { code: "engine_cli", retryable: true };
     case "engine-backend":
       return { code: "engine_backend", retryable: true };
+    case "engine-rate-limit":
+      return { code: "engine_rate_limit", retryable: true };
     case "engine-quota":
       return { code: "engine_quota", retryable: false };
     case "engine-timeout":

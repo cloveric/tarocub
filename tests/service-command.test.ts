@@ -1884,6 +1884,9 @@ describe("telegram service commands", () => {
         stdoutPath: path.join(tempDir, ".cctb", "alpha", "deferred-restart.log"),
         stderrPath: path.join(tempDir, ".cctb", "alpha", "deferred-restart.log"),
       });
+      const helperScript = spawnDetached.mock.calls[0]?.[1]?.[1];
+      expect(helperScript).toContain("writeTimestamped");
+      expect(helperScript).toContain("new Date().toISOString()");
       expect(messages).toEqual([
         'Scheduled deferred restart for instance "alpha" in 5s; it will retry until the active turn finishes.',
       ]);

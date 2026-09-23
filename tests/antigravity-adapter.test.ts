@@ -936,6 +936,88 @@ describe("ProcessAntigravityAdapter", () => {
     await expect(promise).resolves.toMatchObject({ text: "verified goal result" });
   });
 
+  it("does not mask a persistent-turn failure with an opening response before a tool", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage("telegram-12345", { text: "Inspect then answer", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID,
+        step_index: 1,
+        state: "DONE",
+        step_type: "agent_response",
+        text_delta: "I will inspect the workspace.",
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID,
+        step_index: 2,
+        state: "DONE",
+        step_type: "tool",
+        tool_name: "inspect",
+        tool_info: { output: "partial evidence" },
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: {
+        conversation_id: CONVERSATION_ID,
+        status: "ERROR",
+        response: "I will inspect the workspace.",
+        error: "current 503 after tool execution",
+      },
+    }));
+
+    await expect(promise).rejects.toThrow("current 503 after tool execution");
+  });
+
+  it("does not mask a native-goal failure with an opening response before a tool", async () => {
+    const { spawnAntigravity, child, calls } = createSpawnHarness();
+    const adapter = new ProcessAntigravityAdapter("agy", { HOME: "/tmp/home" }, spawnAntigravity);
+
+    const promise = adapter.sendUserMessage(CONVERSATION_ID, { text: "/goal inspect then answer", files: [] });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    child.stdout.emitData(jsonLine({ event: "init", conversation_id: CONVERSATION_ID, init: {} }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID,
+        step_index: 1,
+        state: "DONE",
+        step_type: "agent_response",
+        text_delta: "I will inspect the workspace.",
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "step_update",
+      step_update: {
+        conversation_id: CONVERSATION_ID,
+        step_index: 2,
+        state: "DONE",
+        step_type: "tool",
+        tool_name: "inspect",
+        tool_info: { output: "partial evidence" },
+      },
+    }));
+    child.stdout.emitData(jsonLine({
+      event: "result",
+      result: {
+        conversation_id: CONVERSATION_ID,
+        status: "ERROR",
+        response: "I will inspect the workspace.",
+        error: "current 401 after tool execution",
+      },
+    }));
+
+    await expect(promise).rejects.toThrow("current 401 after tool execution");
+  });
+
   it("retries once when agy authentication fails before init", async () => {
     const children = [new FakeChildProcess(), new FakeChildProcess()];
     const calls: SpawnCall[] = [];

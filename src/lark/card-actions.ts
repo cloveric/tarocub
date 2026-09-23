@@ -2096,10 +2096,10 @@ function settleLarkChoiceCard(input: {
 }
 
 function renderLarkArchiveContinuationSubmittedCard(locale: Locale): Record<string, unknown> {
-  const title = locale === "en" ? "Archive analysis started" : "已开始深入分析";
+  const title = locale === "en" ? "Continue request received" : "已收到继续请求";
   const body = locale === "en"
-    ? "✅ The task is in this conversation's queue. Results will be sent automatically; do not click again or send `/continue`."
-    : "✅ 任务已进入当前会话队列。完成后会自动回复，无需再次点击或输入 `/continue`。";
+    ? "✅ The request is queued while the archive state is checked. Do not click again or send `/continue`; results will follow if analysis can resume."
+    : "✅ 请求已进入队列，正在检查压缩包状态。无需再次点击或输入 `/continue`；若可继续分析，结果会随后自动回复。";
   return {
     schema: "2.0",
     config: { update_multi: true, summary: { content: title } },
@@ -2129,8 +2129,8 @@ function settleLarkArchiveContinuationCard(input: {
       chatId: input.chatId,
       card: submittedCard,
       fallbackText: input.locale === "en"
-        ? "Archive analysis started. Results will be sent automatically; do not send /continue again."
-        : "已开始深入分析，完成后会自动回复，无需再次输入 /continue。",
+        ? "Continue request received. The archive state is being checked; do not send /continue again."
+        : "已收到继续请求，正在检查压缩包状态；无需再次输入 /continue。",
       options: larkReplyOptions(input.ref.messageId, input.replyInThread),
       locale: input.locale,
     });

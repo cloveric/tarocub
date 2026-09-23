@@ -892,7 +892,7 @@ describe("lark card renderer", () => {
     const raw = [
       "Price is $5, see C:\\Users\\foo\\report.txt for $10 more.",
       "参考文献 \\[1\\] 和 \\[2\\]。",
-      "未知命令 $\\alpha + 1$ 保持原样。",
+      "未知命令 $\\unknowncommand + 1$ 保持原样。",
     ].join("\n");
 
     expect(cleanCardText(raw)).toBe(raw);
@@ -900,6 +900,13 @@ describe("lark card renderer", () => {
 
   it("normalizes supported Delta formulas instead of falling back to raw TeX", () => {
     expect(cleanCardText("变化为 $\\Delta x \\approx 2$")).toBe("变化为 Δ x ≈ 2");
+  });
+
+  it("normalizes common Greek letters, operators, and arrows between currency amounts", () => {
+    expect(cleanCardText("Greek $\\alpha + \\beta$; total $\\sum x_i$")).toBe(
+      "Greek α + β; total ∑ x_i",
+    );
+    expect(cleanCardText("Fee $5 \\rightarrow $10")).toBe("Fee $5 → $10");
   });
 
   it("moves bold markers inside quotation marks so inline quotes render in Lark markdown", () => {
