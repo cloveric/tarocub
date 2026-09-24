@@ -5,12 +5,71 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { buildLarkCronExecutor } from "../src/lark/cron.js";
+import { deliverLarkResponse } from "../src/lark/delivery.js";
 import { createLarkServiceRuntime } from "../src/lark/runtime.js";
 import { CronScheduler } from "../src/runtime/cron-scheduler.js";
 import { CronStore } from "../src/state/cron-store.js";
 import { removeTempRoot } from "./helpers/temp-files.js";
 
 describe("Lark cron executor", () => {
+  it("does not count blocked nested cron mutations as parent job failures", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cron-nested-policy-"));
+    const store = new CronStore(stateDir);
+    const channel = { send: vi.fn().mockResolvedValue({ messageId: "om_cron" }) };
+    const bridge = {
+      checkAccess: vi.fn().mockResolvedValue({ kind: "allow" }),
+      handleAuthorizedMessage: vi.fn().mockResolvedValue({
+        text: '[tool:{"name":"cron.add","payload":{"in":"5m","prompt":"nested"}}]',
+      }),
+    };
+    const runtime = createLarkServiceRuntime({
+      cronRuntime: {
+        store,
+        scheduler: { refresh: vi.fn().mockResolvedValue(undefined), runJobNow: vi.fn().mockResolvedValue(undefined) },
+      },
+    });
+
+    try {
+      const job = await store.add({
+        channel: "lark",
+        chatId: 1,
+        userId: 2,
+        chatType: "private",
+        cronExpr: "0 9 * * *",
+        prompt: "daily task",
+        larkChatId: "oc_lark",
+        conversationKey: "lark:oc_lark",
+        deliveryMode: "agent",
+        maxFailures: 3,
+      });
+      const scheduler = new CronScheduler({
+        store,
+        executor: buildLarkCronExecutor({
+          channel: channel as never,
+          bridge: bridge as never,
+          runtime,
+          stateDir,
+          deliverResponse: deliverLarkResponse,
+        }),
+        stateDir,
+      });
+
+      try {
+        await scheduler.runJobNow(job.id);
+        await scheduler.runJobNow(job.id);
+        await scheduler.runJobNow(job.id);
+      } finally {
+        await scheduler.stop();
+      }
+
+      expect(await store.get(job.id)).toMatchObject({ enabled: true, failureCount: 0 });
+      expect(await store.list()).toHaveLength(1);
+      expect(JSON.stringify(channel.send.mock.calls)).toContain("本次请求已忽略");
+    } finally {
+      await removeTempRoot(stateDir);
+    }
+  });
+
   it("treats budget exhaustion as a clean block instead of a scheduler failure", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cron-budget-"));
     const store = new CronStore(stateDir);

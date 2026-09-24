@@ -9545,6 +9545,54 @@ describe("lark service", () => {
     }
   });
 
+  it("executes delivery directives returned by a Lark Mini Bus peer", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-mini-delivery-"));
+    const workspace = path.join(stateDir, "workspace");
+    const filePath = path.join(workspace, "mini-result.txt");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(filePath, "mini result");
+    const channel = fakeChannel();
+    const groupChatId = stableLarkNumericId("lark-group:oc_chat");
+    const writerThreadId = stableLarkNumericId("lark-thread:omt_writer");
+    await new MiniBusStore(stateDir).upsertPeer({
+      name: "writer",
+      chatId: groupChatId,
+      messageThreadId: writerThreadId,
+      conversationKey: "lark:oc_chat:omt_writer",
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async () => ({ text: `ready\n[send-file:${filePath}]` })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime({
+          miniRuntime: { runQueuedBridgeTurn: async (_conversationKey, job) => await job() },
+        }),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_mini_delivery",
+          chatType: "group",
+          threadId: "omt_planner",
+          mentionedBot: true,
+          content: "/mini ask writer create result",
+        }),
+      });
+
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { file: { source: Buffer.from("mini result"), fileName: "mini-result.txt" } },
+        { replyTo: "om_mini_delivery", replyInThread: true },
+      );
+      expect(JSON.stringify(channel.send.mock.calls)).not.toContain(`[send-file:${filePath}]`);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("delivers Lark Mini Bus background task notifications from engine events", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-mini-task-notification-"));
     const channel = fakeChannel();
@@ -10942,7 +10990,7 @@ describe("lark service", () => {
           await mkdir(path.dirname(workspacePath), { recursive: true });
           await copyFile(outsidePath, workspacePath);
           return {
-            text: `请扫码完成验证。\n[send-image:${workspacePath}]`,
+            text: `[send-image:${workspacePath}]`,
             usage: { inputTokens: 7, outputTokens: 3 },
           };
         }),
@@ -10963,6 +11011,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
       expect(imageCreateMock(channel)).toHaveBeenCalledTimes(1);
       const rendered = JSON.stringify(channel.send.mock.calls) + JSON.stringify(channel.updateCard.mock.calls);
+      expectLarkFinalAnswer(channel, "请扫码完成验证");
       expect(rendered).not.toContain("不在允许发送的目录内");
       expect(rendered).not.toContain(outsidePath);
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
@@ -10976,6 +11025,48 @@ describe("lark service", () => {
         type: "turn.completed",
         outcome: "success",
       }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still delivers verified siblings when a delivery repair round fails", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-partial-repair-"));
+    const workspace = path.join(stateDir, "workspace");
+    const validPath = path.join(workspace, "valid.txt");
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-partial-outside-"));
+    const outsidePath = path.join(outsideDir, "outside.txt");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(validPath, "valid sibling");
+    await writeFile(outsidePath, "outside artifact");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn()
+        .mockResolvedValueOnce({
+          text: `报告如下。\n[send-file:${validPath}]\n[send-file:${outsidePath}]`,
+        })
+        .mockResolvedValueOnce({ text: "无法修复该文件。" }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_partial_repair", content: "发送两份报告" }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { file: { source: Buffer.from("valid sibling"), fileName: "valid.txt" } },
+        { replyTo: "om_partial_repair" },
+      );
+      expectLarkFinalAnswer(channel, "报告如下");
+      expectLarkFinalAnswer(channel, "交付失败");
+      expect(JSON.stringify(channel.send.mock.calls)).not.toContain("outside artifact");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
       await rm(outsideDir, { recursive: true, force: true });
@@ -11000,17 +11091,40 @@ describe("lark service", () => {
     await writeFile(outsideB, "b");
     await writeFile(outsideC, "c");
 
+    const repairedDir = path.join(stateDir, "workspace", "repaired");
+    const repairedSmuggle = path.join(repairedDir, "link.png");
+    const repairedB = path.join(repairedDir, "b.png");
+    const repairedC = path.join(repairedDir, "c.png");
+    const store = new CronStore(stateDir);
     const channel = fakeChannel();
     const bridge = {
-      handleAuthorizedMessage: vi.fn(async () => ({
-        // One legit generated image + a symlink escape + two other outside paths.
-        text: [
-          `[send-image:${imageA}]`,
-          `[send-image:${smuggleLink}]`,
-          `[send-image:${outsideB}]`,
-          `[send-image:${outsideC}]`,
-        ].join("\n"),
-      })),
+      handleAuthorizedMessage: vi.fn()
+        .mockResolvedValueOnce({
+          // One legit generated image + a symlink escape + two other outside paths.
+          text: [
+            "四张图如下。",
+            '[tool:{"name":"cron.add","payload":{"in":"1d","prompt":"review delivery"}}]',
+            `[send-image:${imageA}]`,
+            `[send-image:${smuggleLink}]`,
+            `[send-image:${outsideB}]`,
+            `[send-image:${outsideC}]`,
+          ].join("\n"),
+        })
+        .mockImplementationOnce(async () => {
+          await mkdir(repairedDir, { recursive: true });
+          await Promise.all([
+            copyFile(smuggled, repairedSmuggle),
+            copyFile(outsideB, repairedB),
+            copyFile(outsideC, repairedC),
+          ]);
+          return {
+            text: [
+              `[send-image:${repairedSmuggle}]`,
+              `[send-image:${repairedB}]`,
+              `[send-image:${repairedC}]`,
+            ].join("\n"),
+          };
+        }),
     };
     const prevCodexHome = process.env.CODEX_HOME;
     process.env.CODEX_HOME = codexHome;
@@ -11019,25 +11133,27 @@ describe("lark service", () => {
       await handleLarkMessage({
         channel,
         bridge,
-        runtime: createLarkServiceRuntime(),
+        runtime: createLarkServiceRuntime({
+          cronRuntime: {
+            store,
+            scheduler: { refresh: vi.fn(async () => undefined), runJobNow: vi.fn(async () => undefined) },
+          },
+        }),
         stateDir,
         message: fakeLarkMessage({ messageId: "om_genimg", content: "发图" }),
       });
 
-      const calls = channel.send.mock.calls as unknown as unknown[][];
-      // Mixed valid/invalid batches are atomic: no sibling is delivered before
-      // the engine gets one repair turn.
-      const mediaCalls = calls.filter((c) => {
-        const payload = c[1] as { image?: unknown; file?: unknown; card?: unknown } | undefined;
-        return Boolean(payload?.image || payload?.file || payload?.card);
-      });
-      expect(mediaCalls).toHaveLength(1); // the run card only, never an artifact
       expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
       expect(bridge.handleAuthorizedMessage).toHaveBeenNthCalledWith(
         2,
         expect.objectContaining({ text: expect.stringContaining("Delivery preflight retry") }),
       );
-      expectLarkFinalAnswer(channel, "交付失败");
+      expectLarkFinalAnswer(channel, "四张图如下");
+      expect(imageCreateMock(channel)).toHaveBeenCalledTimes(4);
+      expect(await store.list()).toEqual([
+        expect.objectContaining({ runOnce: true, prompt: "review delivery" }),
+      ]);
+      expect(JSON.stringify(channel.send.mock.calls) + JSON.stringify(channel.updateCard.mock.calls)).not.toContain("交付失败");
       // The timeline still records every rejected path individually.
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       const rejected = timeline.filter((event) => event.type === "file.rejected");

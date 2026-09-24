@@ -51,11 +51,17 @@ describe("Lark delivery protocol guards", () => {
     ]);
   });
 
+  it("accepts a message-only send.batch without asking for artifact repair", async () => {
+    const result = await preflightLarkResponseDeliveryDirectives(tool("send.batch", { message: "Status only" }));
+    expect(result).toMatchObject({ sawDirective: true, artifactCount: 0, issues: [] });
+    expect(result.deliveryMessages).toEqual(["Status only"]);
+  });
+
   it("never exposes a pseudo send tag as visible reply text", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-pseudo-tag-"));
     const channel = fakeChannel();
     try {
-      await deliverLarkResponse({
+      const result = await deliverLarkResponse({
         channel,
         runtime: createLarkServiceRuntime(),
         chatId: "oc_chat",
@@ -63,7 +69,9 @@ describe("Lark delivery protocol guards", () => {
         stateDir,
       });
       const sent = JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls);
+      expect(result.ok).toBe(false);
       expect(sent).toContain("Here it is");
+      expect(sent).toContain("无法执行的发送指令");
       expect(sent).not.toContain("send.batch=");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -105,15 +113,38 @@ describe("Lark delivery protocol guards", () => {
         stateDir,
         allowCronMutations: false,
       });
-      expect(result.ok).toBe(false);
+      expect(result.ok).toBe(true);
       expect(await store.list()).toHaveLength(0);
-      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).toContain("不能创建或修改其他定时任务");
+      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).toContain("本次请求已忽略");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
   });
 
-  it("keeps one recurring schedule and suppresses sibling boundary one-shots", async () => {
+  it("allows a scheduled run to inspect schedules without mutating them", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cron-list-"));
+    const store = new CronStore(stateDir);
+    const runtime = createLarkServiceRuntime({
+      cronRuntime: { store, scheduler: { refresh: vi.fn(async () => undefined), runJobNow: vi.fn(async () => undefined) } },
+    });
+    const channel = fakeChannel();
+    try {
+      const result = await deliverLarkResponse({
+        channel,
+        runtime,
+        chatId: "oc_chat",
+        text: tool("cron.list", {}),
+        stateDir,
+        allowCronMutations: false,
+      });
+      expect(result.ok).toBe(true);
+      expect(JSON.stringify((channel.send as ReturnType<typeof vi.fn>).mock.calls)).toContain("暂无定时任务");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps multiple recurring and unrelated one-shot schedules while suppressing matching boundary duplicates", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cron-dedupe-"));
     const store = new CronStore(stateDir);
     const runtime = createLarkServiceRuntime({
@@ -126,16 +157,21 @@ describe("Lark delivery protocol guards", () => {
         runtime,
         chatId: "oc_chat",
         text: [
-          tool("cron.add", { cron: "0 9 * * *", prompt: "daily" }),
-          tool("cron.add", { at: "2030-01-01T09:00:00+08:00", prompt: "end boundary" }),
-          '[cron-add:{"in":"5m","prompt":"current boundary"}]',
+          tool("cron.add", { cron: "0 10 * * 1", prompt: "weekly summary" }),
+          tool("cron.add", { cron: "0 16 * * 5", prompt: "weekly summary" }),
+          tool("cron.add", { at: "2030-01-01T09:00:00+08:00", prompt: "project meeting" }),
+          '[cron-add:{"in":"5m","prompt":"weekly summary"}]',
         ].join("\n"),
         stateDir,
       });
       expect(result.ok).toBe(true);
       const jobs = await store.list();
-      expect(jobs).toHaveLength(1);
-      expect(jobs[0]).toMatchObject({ cronExpr: "0 9 * * *", prompt: "daily" });
+      expect(jobs).toHaveLength(3);
+      expect(jobs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ cronExpr: "0 10 * * 1", prompt: "weekly summary" }),
+        expect.objectContaining({ cronExpr: "0 16 * * 5", prompt: "weekly summary" }),
+        expect.objectContaining({ runOnce: true, prompt: "project meeting" }),
+      ]));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

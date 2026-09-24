@@ -1,7 +1,7 @@
 import type { EngineStreamEvent } from "../codex/adapter.js";
 import { renderCodexFileCitations } from "../runtime/codex-file-citations.js";
 import type { Locale } from "../telegram/message-renderer.js";
-import { stripDeliveryTags } from "../telegram/delivery-tags.js";
+import { stripDeliveryTags, stripInvalidDeliveryPseudoTags } from "../telegram/delivery-tags.js";
 import { stripCronAddTags } from "../telegram/cron-tags.js";
 import {
   extractTelegramToolTagMatches,
@@ -1480,7 +1480,9 @@ export function cleanCardText(
   locale: Locale = "zh",
   options: { streaming?: boolean } = {},
 ): string {
-  const stripped = stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(content)));
+  const stripped = stripInvalidDeliveryPseudoTags(
+    stripCronAddTags(stripTelegramToolTags(stripDeliveryTags(content))),
+  );
   return normalizeLarkMarkdown(renderCodexFileCitations(stripped, locale, options)).trim();
 }
 

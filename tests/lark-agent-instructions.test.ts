@@ -83,13 +83,17 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("Copy outside files into the workspace");
     expect(instructions).toContain("saved PATH");
     expect(instructions).toContain("each path once");
+    expect(instructions).toContain("title directly above [send-image:]");
     expect(instructions).toContain("auto-split above 120 MiB");
     expect(instructions).toContain("Claim delivery only with an executable directive");
     expect(instructions).toContain("Lark cards do not render LaTeX");
     expect(instructions).toContain("÷, ×, ≈, ≤, ≥");
     expect(instructions).toContain("explicit request");
     expect(instructions).toContain("one of in/at/cron");
+    expect(instructions).toContain("cron.list/cron.remove/cron.toggle");
     expect(instructions).toContain("Asia/Shanghai");
+    expect(instructions).toContain("web_extract/browser");
+    expect(instructions).toContain("Scrapling");
     expect(instructions).toContain("9222/9223 only for a named skill");
     expect(instructions).toContain("cite links");
   });
@@ -123,6 +127,24 @@ describe("dynamic Lark media instructions", () => {
       expect(larkAgentInstructions()).not.toContain("local Qwen");
       expect(larkMediaTaskInstruction("帮我整理今天的待办")).toBeUndefined();
       expect(larkMediaTaskInstruction("下载这个视频并转写")).toContain("Aliyun Tingwu first");
+      expect(larkMediaTaskInstruction("https://youtu.be/example")).toContain("Aliyun Tingwu first");
+      expect(larkMediaTaskInstruction("https://b23.tv/example")).toContain("Aliyun Tingwu first");
+      expect(larkMediaTaskInstruction("帮我整理成文字 /tmp/meeting.m4a")).toContain("Aliyun Tingwu first");
+      expect(larkMediaTaskInstruction([
+        "[Bridge media transcription completed]",
+        'File: "audio-1.ogg"',
+        "Use the transcript below as the completed transcription. Do not inspect, probe, split, or transcribe the attached media again unless the user explicitly asks for a retry.",
+        "Transcript:",
+        "把这个 B 站视频转写一下",
+        "[End bridge media transcription]",
+      ].join("\n"))).toContain("Aliyun Tingwu first");
+      expect(larkMediaTaskInstruction([
+        "[Bridge media transcription completed]",
+        "Transcript:",
+        "先整理会议结论",
+        "[End bridge media transcription]",
+        "[Bridge media transcription unavailable for second.m4a; inspect or transcribe the attached file if needed.]",
+      ].join("\n"))).toContain("Aliyun Tingwu first");
     } finally {
       restoreEnv("ASR_HTTP_URL", previousUrl);
       restoreEnv("TINGWU_ASR_DIR", previousDir);
@@ -131,7 +153,14 @@ describe("dynamic Lark media instructions", () => {
   });
 
   it("never asks the agent to re-transcribe bridge-completed media", () => {
-    const text = "[Bridge media transcription completed]\nTranscript:\n已经完成";
+    const text = [
+      "[Bridge media transcription completed]",
+      'File: "audio-1.ogg"',
+      "Use the transcript below as the completed transcription. Do not inspect, probe, split, or transcribe the attached media again unless the user explicitly asks for a retry.",
+      "Transcript:",
+      "请总结今天的会议结论",
+      "[End bridge media transcription]",
+    ].join("\n");
     expect(larkMediaTaskInstruction(text)).toBeUndefined();
   });
 

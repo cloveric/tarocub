@@ -27,7 +27,7 @@ import {
 import { renderLarkBoardTaskCard } from "./board-card.js";
 import { larkAgentInstructions, larkMediaTaskInstruction } from "./agent-instructions.js";
 import { sendLarkCardWithFallback } from "./card-delivery.js";
-import { deliverLarkResponse, sendLarkMarkdown } from "./delivery.js";
+import { deliverLarkResponse, hasLarkPostTurnDelivery, sendLarkMarkdown } from "./delivery.js";
 import { renderLarkBackgroundTaskHeader, resolveLarkLocale } from "./locale.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkActiveRun, LarkServiceRuntime } from "./runtime.js";
@@ -313,7 +313,7 @@ export async function handleLarkMiniBusCommand(
   const context: MiniBusCommandContext = {
     api: {
       sendMessage: async (_chatId: number, text: string) => {
-        await sendLarkMarkdown(input.channel, normalized.chatId, text, larkCommandReplyOptions(normalized));
+        await deliverLarkBusReply(input, normalized, text, resolveInstanceWorkspacePath(cfg));
         return { message_id: 0, text };
       },
     },
@@ -416,7 +416,7 @@ export async function handleLarkDelegationCommand(
   const context: DelegationCommandContext = {
     api: {
       sendMessage: async (_chatId: number, text: string) => {
-        await sendLarkMarkdown(input.channel, normalized.chatId, text, larkCommandReplyOptions(normalized));
+        await deliverLarkBusReply(input, normalized, text, resolveInstanceWorkspacePath(cfg));
         return { message_id: 0, text };
       },
     },
@@ -489,7 +489,7 @@ export async function handleLarkCrewWorkflow(
   const context: CrewWorkflowContext = {
     api: {
       sendMessage: async (_chatId: number, text: string) => {
-        await sendLarkMarkdown(input.channel, normalized.chatId, text, larkCommandReplyOptions(normalized));
+        await deliverLarkBusReply(input, normalized, text, resolveInstanceWorkspacePath(cfg));
         return { message_id: 0, text };
       },
     },
@@ -548,6 +548,39 @@ function larkCommandReplyOptions(normalized: LarkNormalizedBridgeMessage): { rep
     replyTo: normalized.messageId,
     replyInThread: Boolean(normalized.threadId),
   };
+}
+
+async function deliverLarkBusReply(
+  input: LarkBusCommandInput,
+  normalized: LarkNormalizedBridgeMessage,
+  text: string,
+  workspaceOverride?: string,
+): Promise<void> {
+  if (!hasLarkPostTurnDelivery(text)) {
+    await sendLarkMarkdown(
+      input.channel,
+      normalized.chatId,
+      text,
+      larkCommandReplyOptions(normalized),
+    );
+    return;
+  }
+  await deliverLarkResponse({
+    channel: input.channel,
+    runtime: input.runtime,
+    chatId: normalized.chatId,
+    ...larkCommandReplyOptions(normalized),
+    text,
+    stateDir: input.stateDir,
+    workspaceOverride,
+    conversationKey: normalized.conversationKey,
+    bridgeChatType: normalized.bridgeChatType,
+    bridgeChatId: normalized.bridgeChatId,
+    bridgeUserId: normalized.bridgeUserId,
+    larkThreadId: normalized.threadId,
+    larkMessageId: normalized.messageId,
+    instanceName: input.instanceName,
+  });
 }
 
 function createLarkBusEngineEventHandler(

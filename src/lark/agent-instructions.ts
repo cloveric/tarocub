@@ -130,11 +130,27 @@ export interface LarkAgentInstructionOptions {
   context?: LarkAgentInstructionContext;
 }
 
-const FETCHED_MEDIA_TASK_PATTERN = /(?:transcrib|transcript|subtitle|caption|podcast|audio|video|youtube|bilibili|speech[- ]?to[- ]?text|转写|转录|字幕|音频|视频|录音|语音|播客|下载.{0,8}(?:视频|音频))/iu;
+const FETCHED_MEDIA_TASK_PATTERN = /(?:transcrib|transcript|subtitle|caption|podcast|audio|video|youtube|youtu\.be|bilibili|b23\.tv|douyin|speech[- ]?to[- ]?text|\.(?:aac|flac|m4a|mkv|mov|mp3|mp4|ogg|wav|webm)\b|转写|转录|字幕|音频|视频|录音|语音|播客|整理成.{0,4}文字|下载.{0,8}(?:视频|音频))/iu;
+
+function mediaTaskIntentText(text: string): string {
+  if (!text.includes(`[${BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER}]`)) {
+    return text;
+  }
+  return text
+    .replace(
+      /\[Bridge media transcription completed\]\r?\n(?:File:[^\r\n]*\r?\n)?(?:Use the transcript below[^\r\n]*\r?\n)?Transcript:\r?\n([\s\S]*?)\r?\n\[End bridge media transcription\]/giu,
+      "$1",
+    )
+    .replace(/\[Bridge media transcription completed\]/giu, "")
+    .replace(/^File:[^\r\n]*$/gimu, "")
+    .replace(/^Use the transcript below[^\r\n]*$/gimu, "")
+    .replace(/^Transcript:\s*$/gimu, "")
+    .replace(/^\[End bridge media transcription\]\s*$/gimu, "");
+}
 
 /** Per-turn media procedure. Ordinary turns should not pay this prompt cost. */
 export function larkMediaTaskInstruction(text: string): string | undefined {
-  if (!FETCHED_MEDIA_TASK_PATTERN.test(text) || text.includes(`[${BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER}]`)) {
+  if (!FETCHED_MEDIA_TASK_PATTERN.test(mediaTaskIntentText(text))) {
     return undefined;
   }
   return localAsrAgentInstruction() ?? cloudAsrAgentInstruction();
@@ -151,8 +167,8 @@ export function larkAgentInstructions(options: LarkAgentInstructionOptions = {})
   const canDeliver = context === "chat" || context === "card" || context === "bus" || context === "cron";
   const canSchedule = context === "chat" || context === "card" || context === "bus";
   const lines = [
-    "Lark routing tags are context, not the task; forwarded content is the task. Be concise; no progress placeholder cards; ask only for missing tools/auth/scopes.",
-    "Lark Docs/Calendar/Drive/Sheets/OAuth: use `lark-cli`, never IM in this bot's chats (cross-app open_id). OAuth is private; Sheets use structured values, not Docs/Base.",
+    "Lark routing tags are context; forwarded content is the task. Be concise; no progress cards; ask only for missing tools/auth/scopes.",
+    "Lark Docs/Calendar/Drive/Sheets/OAuth: use `lark-cli`; no IM here (cross-app open_id). OAuth private; Sheets use structured values, not Docs/Base.",
   ];
 
   if (engine === "deepseek" || engine === "antigravity") {
@@ -160,8 +176,8 @@ export function larkAgentInstructions(options: LarkAgentInstructionOptions = {})
   }
 
   if (canDeliver) {
-    lines.push("Artifacts: [send-file:/absolute/path], [send-image:/absolute/path], send.file/send.image/send.audio/send.video, or:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p.png\",\"caption\":\"P\"}]}}\n```\nPictures use `images`. Copy outside files into the workspace. Verify non-empty output; `saved PATH` is not delivery.");
-    lines.push("Use one delivery syntax and each path once unless resend was requested. One titled image batch becomes one card; batches auto-split above 120 MiB. Small text may use fenced `file:name.ext`. Claim delivery only with an executable directive in this response.");
+    lines.push("Artifacts: [send-file:/absolute/path], [send-image:/absolute/path], send.file/send.image/send.audio/send.video, or:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p.png\",\"caption\":\"P\"}]}}\n```\nPictures use `images`. Copy outside files into the workspace. Verify output; `saved PATH` is not delivery.");
+    lines.push("Use one syntax; each path once unless resend requested. Put a single image title directly above [send-image:]; one titled batch becomes one card. Batches auto-split above 120 MiB. Small text: fenced `file:name.ext`. Claim delivery only with an executable directive.");
   }
 
   if (engine === "codex") {
@@ -173,22 +189,22 @@ export function larkAgentInstructions(options: LarkAgentInstructionOptions = {})
   }
 
   if (engine === "claude" || engine === "kimi" || engine === "deepseek") {
-    lines.push("Background work: one job/batch, no nested/page/poll waiters; verify output, then one final notice with delivery directives and a conclusion.");
+    lines.push("Background work: one job/batch; no nested/page/poll waiters; verify output, then one final notice with delivery directives and conclusion.");
   }
 
   lines.push("Lark cards do not render LaTeX; prefer Unicode such as ÷, ×, ≈, ≤, ≥ over `$...$`/`\\text{}`.");
 
   if (canSchedule) {
     const timezone = options.timezone?.trim() || "the instance timezone";
-    lines.push(`Reminders only on explicit request. cron.add: exactly one of in/at/cron; at uses ISO timezone; recurring uses one 5-field expression in ${timezone}. No current-minute/end-boundary one-shots. List before ambiguous remove/toggle; let the bridge confirm.`);
+    lines.push(`Reminders only on explicit request. cron.add: exactly one of in/at/cron; at uses ISO timezone; recurring uses one 5-field expression in ${timezone}. No current-minute/end-boundary one-shots. Manage with cron.list/cron.remove/cron.toggle; list first if ambiguous; let the bridge confirm.`);
   } else if (context === "cron") {
     lines.push("This scheduled run must not create, remove, or modify schedules.");
   }
 
   if (engine === "claude" && options.claudeChrome) {
-    lines.push("Signed-in browser tasks: main Chrome. Use 9222/9223 only for a named skill. Disclose web use and cite links.");
+    lines.push("Signed-in tasks: main Chrome. Exact URLs: web_extract/browser; blocked/dynamic → Scrapling; otherwise web_search. 9222/9223 only for a named skill; disclose web use and cite links.");
   } else {
-    lines.push("Use this engine's web tools; disclose web use and cite links. Use 9222/9223 only for a named skill.");
+    lines.push("URLs: web_extract/browser; blocked/dynamic → Scrapling; otherwise web_search. Use this engine's web tools; disclose use and cite links. 9222/9223 only for a named skill.");
   }
 
   return lines.join("\n");

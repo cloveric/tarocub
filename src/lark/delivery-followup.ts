@@ -3,10 +3,13 @@ import path from "node:path";
 import {
   extractDeliveryTagMatches,
   extractInvalidDeliveryPseudoTagMatches,
+  stripDeliveryTags,
+  stripInvalidDeliveryPseudoTags,
 } from "../telegram/delivery-tags.js";
 import {
   extractTelegramToolTagMatches,
   parseTelegramToolTagPayload,
+  stripTelegramToolTags,
 } from "../telegram/tool-tags.js";
 import {
   extractWholeResponseFileBlock,
@@ -17,14 +20,17 @@ import {
   resolveLarkDeliveryRoots,
   type LarkFileRejectReason,
   type LarkDeliveryPreflightInput,
+  type LarkSendArtifact,
   type LarkSendPathKind,
 } from "./delivery-preflight.js";
+import { captionForLarkImage } from "./delivery.js";
 
 const DELIVERY_FOLLOWUP_MAX_CHARS = 160;
 
 export interface LarkDeliveryDirectiveIssue {
   path: string;
   kind?: LarkSendPathKind;
+  caption?: string;
   reason: Exclude<LarkFileRejectReason, "upload-failed"> | "invalid-directive";
   realPath?: string;
   workspaceRoot?: string;
@@ -34,6 +40,8 @@ export interface LarkDeliveryDirectivePreflight {
   sawDirective: boolean;
   artifactCount: number;
   issues: LarkDeliveryDirectiveIssue[];
+  acceptedArtifacts: LarkSendArtifact[];
+  deliveryMessages: string[];
 }
 
 /**
@@ -105,6 +113,8 @@ export async function preflightLarkResponseDeliveryDirectives(
     return {
       sawDirective: true,
       artifactCount: 1,
+      acceptedArtifacts: [],
+      deliveryMessages: [],
       issues: inlinePreflight.ok
         ? []
         : [{
@@ -118,11 +128,16 @@ export async function preflightLarkResponseDeliveryDirectives(
   // Collect every artifact across BOTH legacy and structured syntax before
   // deciding. Returning after the first valid group let a good file conceal a
   // second missing file in another tag family.
-  const artifacts: Array<{ path: string; kind: LarkSendPathKind }> = extractDeliveryTagMatches(text).map((match) => ({
-    path: match.path,
-    kind: match.preferPhoto ? "image" as const : "file" as const,
-  }));
+  const artifacts: LarkSendArtifact[] = extractDeliveryTagMatches(text).map((match) => {
+    const caption = match.preferPhoto ? captionForLarkImage(text, match.index) : undefined;
+    return {
+      path: match.path,
+      kind: match.preferPhoto ? "image" as const : "file" as const,
+      ...(caption ? { caption } : {}),
+    };
+  });
   const issues: LarkDeliveryDirectiveIssue[] = [];
+  const deliveryMessages: string[] = [];
   let sawDeliveryDirective = artifacts.length > 0;
 
   for (const match of extractInvalidDeliveryPseudoTagMatches(text)) {
@@ -138,14 +153,17 @@ export async function preflightLarkResponseDeliveryDirectives(
       }
       sawDeliveryDirective = true;
       const normalized = normalizeLarkSendTool(name, payload);
-      // An invalid send.* payload, or a message-only batch, delivers no artifact.
-      if (!normalized.ok || normalized.artifacts.length === 0) {
+      if (!normalized.ok || (normalized.artifacts.length === 0 && !normalized.message.trim())) {
         issues.push({ path: name, reason: "invalid-directive" });
         continue;
+      }
+      if (normalized.message.trim()) {
+        deliveryMessages.push(normalized.message.trim());
       }
       artifacts.push(...normalized.artifacts.map((artifact) => ({
         path: artifact.path,
         kind: artifact.kind,
+        ...(artifact.caption ? { caption: artifact.caption } : {}),
       })));
     } catch {
       // The real sender emits a parse error for malformed tool JSON. If it was
@@ -163,6 +181,8 @@ export async function preflightLarkResponseDeliveryDirectives(
       sawDirective: sawDeliveryDirective,
       artifactCount: 0,
       issues,
+      acceptedArtifacts: [],
+      deliveryMessages,
     };
   }
 
@@ -170,23 +190,131 @@ export async function preflightLarkResponseDeliveryDirectives(
     ? { explicitAllowedRoots: [context] }
     : context ?? {};
   const roots = await resolveLarkDeliveryRoots(preflightInput);
+  const acceptedArtifacts: LarkSendArtifact[] = [];
   for (const artifact of artifacts) {
     const checked = await preflightLarkDeliveryPath(artifact.path, roots);
     if (!checked.ok) {
       issues.push({
         path: artifact.path,
         kind: artifact.kind,
+        ...(artifact.caption ? { caption: artifact.caption } : {}),
         reason: checked.reason,
         ...(checked.realPath ? { realPath: checked.realPath } : {}),
         ...(checked.workspaceRoot ? { workspaceRoot: checked.workspaceRoot } : {}),
       });
+      continue;
     }
+    acceptedArtifacts.push(artifact);
   }
   return {
     sawDirective: sawDeliveryDirective,
     artifactCount: artifacts.length,
     issues,
+    acceptedArtifacts,
+    deliveryMessages,
   };
+}
+
+/**
+ * Preserve the first answer while a second turn repairs only rejected
+ * artifacts. Send directives are rebuilt from paths that already passed the
+ * exact sender preflight; non-delivery tools remain untouched.
+ */
+export function buildLarkDeliveryRepairBase(
+  text: string,
+  preflight: LarkDeliveryDirectivePreflight,
+): string {
+  const sendToolMatches = extractTelegramToolTagMatches(text).filter((match) => {
+    try {
+      return isLarkSendToolName(parseTelegramToolTagPayload(match.payload).name);
+    } catch {
+      return /send\.(?:file|image|audio|video|batch)/u.test(match.payload);
+    }
+  });
+  const strippedText = stripInvalidDeliveryPseudoTags(
+    stripDeliveryTags(stripTelegramToolTags(text, sendToolMatches)),
+  );
+  const preservedText = preflight.issues.length > 0
+    ? stripUnverifiedDeliveryClaimLines(strippedText)
+    : strippedText;
+  return preservedText.trim();
+}
+
+export function renderLarkMergedDeliveryRepairDirectives(
+  initial: LarkDeliveryDirectivePreflight,
+  repaired: LarkDeliveryDirectivePreflight,
+): string {
+  const pendingIssues = [...initial.issues];
+  const replacements = repaired.acceptedArtifacts.map((artifact) => {
+    const issueIndex = pendingIssues.findIndex((issue) => issue.kind === artifact.kind);
+    const issue = issueIndex >= 0 ? pendingIssues.splice(issueIndex, 1)[0] : undefined;
+    return !artifact.caption && issue?.caption
+      ? { ...artifact, caption: issue.caption }
+      : artifact;
+  });
+  return renderLarkAcceptedDeliveryDirectives({
+    sawDirective: true,
+    artifactCount: initial.acceptedArtifacts.length + replacements.length,
+    issues: [],
+    acceptedArtifacts: [...initial.acceptedArtifacts, ...replacements],
+    deliveryMessages: [],
+  }, { includeMessages: false });
+}
+
+export function renderLarkAcceptedDeliveryDirectives(
+  preflight: LarkDeliveryDirectivePreflight,
+  options: { includeMessages?: boolean } = {},
+): string {
+  const artifacts = dedupeArtifacts(preflight.acceptedArtifacts);
+  const messages = options.includeMessages === false
+    ? []
+    : [...new Set(preflight.deliveryMessages.map((message) => message.trim()).filter(Boolean))];
+  if (artifacts.length === 0) {
+    return messages.join("\n\n");
+  }
+
+  const payload: Record<string, unknown> = {};
+  const entries = (kind: LarkSendPathKind): LarkSendArtifact[] =>
+    artifacts.filter((artifact) => artifact.kind === kind);
+  const withCaptions = (items: LarkSendArtifact[]): Array<string | { path: string; caption: string }> =>
+    items.map((artifact) => artifact.caption
+      ? { path: artifact.path, caption: artifact.caption }
+      : artifact.path);
+
+  const images = withCaptions(entries("image"));
+  const files = withCaptions(entries("file"));
+  const audios = entries("audio").map((artifact) => artifact.path);
+  const videos = entries("video").map((artifact) => artifact.path);
+  if (images.length > 0) payload.images = images;
+  if (files.length > 0) payload.files = files;
+  if (audios.length > 0) payload.audios = audios;
+  if (videos.length > 0) payload.videos = videos;
+  if (messages.length > 0) payload.message = messages.join("\n\n");
+  return `\`\`\`tool-call\n${JSON.stringify({ name: "send.batch", payload })}\n\`\`\``;
+}
+
+function stripUnverifiedDeliveryClaimLines(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return true;
+      if (/^(?:done|completed|ready|好了|完成了|已完成)[.!。！]?$/iu.test(trimmed)) return false;
+      return !claimsHistoricalDelivery(trimmed);
+    })
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function dedupeArtifacts(artifacts: readonly LarkSendArtifact[]): LarkSendArtifact[] {
+  const seen = new Set<string>();
+  return artifacts.filter((artifact) => {
+    const key = `${artifact.kind}\u0000${artifact.path}\u0000${artifact.caption ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function hasCurrentTurnDeliveryDirective(
@@ -244,8 +372,8 @@ export function larkDeliveryPreflightRepairPrompt(
     "Delivery preflight retry: your previous response referenced artifact paths that cannot be delivered.",
     rejected ? `Rejected artifacts:\n${rejected}` : "No executable artifact directive was found.",
     workspaceRoot ? `Allowed workspace: ${JSON.stringify(workspaceRoot)}` : undefined,
-    "Copy each non-secret existing artifact into the allowed workspace, verify each copied file exists and is non-empty, then return the corrected [send-image:/absolute/path], [send-file:/absolute/path], or send.* tags in THIS response.",
-    "Do not merely explain the path restriction. Never copy credentials or secret files. If an artifact cannot be repaired safely, state that exact failure instead of claiming it was sent.",
+    "Repair ONLY the rejected artifacts: copy each non-secret existing artifact into the allowed workspace, verify it exists and is non-empty, then return only the corrected [send-image:/absolute/path], [send-file:/absolute/path], or send.* tags.",
+    "Do not repeat the previous prose, valid sibling artifacts, or non-delivery tool actions; the bridge preserves them. Never copy credentials or secret files. If an artifact cannot be repaired safely, state that exact failure instead of claiming it was sent.",
   ].filter((line): line is string => Boolean(line)).join("\n");
 }
 

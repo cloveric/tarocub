@@ -814,6 +814,10 @@ describe("lark card renderer", () => {
     ].join("\n"));
   });
 
+  it("removes invalid pseudo send directives from run-card text", () => {
+    expect(cleanCardText("Ready\n[send.batch=/tmp/result.png]")).toBe("Ready");
+  });
+
   it("does not treat a fence-like code line with trailing text as a closing fence", () => {
     expect(cleanCardText([
       "```text",

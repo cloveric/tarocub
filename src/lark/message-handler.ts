@@ -75,11 +75,13 @@ import {
   trackLarkChoiceCard,
 } from "./delivery.js";
 import {
+  buildLarkDeliveryRepairBase,
   isLarkDeliveryFollowupRequest,
   larkDeliveryFollowupInstruction,
   larkDeliveryFollowupRepairPrompt,
   larkDeliveryPreflightRepairPrompt,
   preflightLarkResponseDeliveryDirectives,
+  renderLarkMergedDeliveryRepairDirectives,
   renderLarkDeliveryPreflightFailure,
   renderUnverifiedLarkDeliveryClaim,
   shouldRepairLarkDeliveryFollowup,
@@ -2398,8 +2400,9 @@ async function runNormalizedLarkMessage(
         const hasRepairableDeliveryIssue = deliveryIssues.some(
           (issue) => issue.reason === "outside-workspace" || issue.reason === "invalid-directive",
         );
-        // Repair the whole response before sending any sibling. Partial delivery
-        // is ambiguous to users and cannot be safely replayed after a restart.
+        // Repair rejected artifacts before sending any sibling. The bridge
+        // preserves the first answer, actions, and verified files while the
+        // retry supplies only replacements for rejected artifacts.
         if (initialDeliveryDirectivePreflight.sawDirective && hasRepairableDeliveryIssue) {
           for (const issue of deliveryIssues) {
             await appendLarkTimelineEvent(input.stateDir, normalized, {
@@ -2425,6 +2428,10 @@ async function runNormalizedLarkMessage(
             },
           });
           const firstUsage = result.usage;
+          const repairBase = buildLarkDeliveryRepairBase(
+            result.text,
+            initialDeliveryDirectivePreflight,
+          );
           runCard?.beginAnswerAttempt();
           const repaired = await input.bridge.handleAuthorizedMessage({
             ...bridgeTurnInput,
@@ -2438,17 +2445,25 @@ async function runNormalizedLarkMessage(
             deliveryPreflight,
           );
           const repairSucceeded = repairedDeliveryDirectivePreflight.sawDirective
-            && repairedDeliveryDirectivePreflight.artifactCount > 0
+            && repairedDeliveryDirectivePreflight.acceptedArtifacts.length >= deliveryIssues.length
             && repairedDeliveryDirectivePreflight.issues.length === 0;
-          result = {
-            ...repaired,
-            text: repairSucceeded
-              ? repairedText
-              : renderLarkDeliveryPreflightFailure(
+          const verifiedDirectives = renderLarkMergedDeliveryRepairDirectives(
+            initialDeliveryDirectivePreflight,
+            repairedDeliveryDirectivePreflight,
+          );
+          const repairResult = repairSucceeded
+            ? verifiedDirectives
+            : [
+                verifiedDirectives,
+                renderLarkDeliveryPreflightFailure(
                   locale,
                   repairedDeliveryDirectivePreflight,
                   initialDeliveryDirectivePreflight,
                 ),
+              ].filter((part) => part.trim()).join("\n\n");
+          result = {
+            ...repaired,
+            text: [repairBase, repairResult].filter((part) => part.trim()).join("\n\n"),
             usage: mergeLarkTurnUsage(firstUsage, repaired.usage),
           };
           if (!repairSucceeded) {
