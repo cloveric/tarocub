@@ -191,6 +191,7 @@ export async function preflightLarkResponseDeliveryDirectives(
     : context ?? {};
   const roots = await resolveLarkDeliveryRoots(preflightInput);
   const acceptedArtifacts: LarkSendArtifact[] = [];
+  const acceptedArtifactIdentities = new Set<string>();
   for (const artifact of artifacts) {
     const checked = await preflightLarkDeliveryPath(artifact.path, roots);
     if (!checked.ok) {
@@ -204,6 +205,13 @@ export async function preflightLarkResponseDeliveryDirectives(
       });
       continue;
     }
+    // The sender claims artifacts by the underlying file identity. Mirror that
+    // here so repeated paths, symlinks, or hard links cannot inflate a repair's
+    // accepted count and make one file look like several repaired artifacts.
+    if (acceptedArtifactIdentities.has(checked.fileIdentity)) {
+      continue;
+    }
+    acceptedArtifactIdentities.add(checked.fileIdentity);
     acceptedArtifacts.push(artifact);
   }
   return {
@@ -257,8 +265,10 @@ export function renderLarkMergedDeliveryRepairDirectives(
     artifactCount: initial.acceptedArtifacts.length + replacements.length,
     issues: [],
     acceptedArtifacts: [...initial.acceptedArtifacts, ...replacements],
-    deliveryMessages: [],
-  }, { includeMessages: false });
+    deliveryMessages: [...initial.deliveryMessages, ...repaired.deliveryMessages]
+      .map((message) => stripUnverifiedDeliveryClaimLines(message))
+      .filter(Boolean),
+  });
 }
 
 export function renderLarkAcceptedDeliveryDirectives(

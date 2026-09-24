@@ -38,6 +38,7 @@ export type LarkPathPreflightResult =
   | {
       ok: true;
       realPath: string;
+      fileIdentity: string;
       fileBytes: number;
       workspaceRoot?: string;
     }
@@ -269,6 +270,9 @@ export async function preflightLarkDeliveryPath(
     return {
       ok: true,
       realPath,
+      fileIdentity: fileStat.ino > 0
+        ? `inode:${fileStat.dev}:${fileStat.ino}`
+        : `path:${canonicalPathKey(realPath)}`,
       fileBytes: fileStat.size,
       workspaceRoot: roots.workspaceRoot,
     };
@@ -281,6 +285,13 @@ export async function preflightLarkDeliveryPath(
       workspaceRoot: roots.workspaceRoot,
     };
   }
+}
+
+function canonicalPathKey(filePath: string): string {
+  const normalized = filePath.normalize("NFC");
+  return process.platform === "darwin" || process.platform === "win32"
+    ? normalized.toLowerCase()
+    : normalized;
 }
 
 function normalizeLarkBatchPathEntries(value: unknown): Array<{ path: string; caption?: string }> | null {

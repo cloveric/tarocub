@@ -348,38 +348,11 @@ export async function deliverLarkResponse(input: {
   // same operation. Claim paths across both before sending so a model cannot
   // accidentally upload one artifact twice by emitting both protocols.
   const claimedArtifactPaths = new Set<string>();
-  const parsedToolCronDescriptors = new Map<number, CronAddDescriptor>();
-  for (const [index, match] of toolMatches.entries()) {
-    try {
-      const parsed = parseTelegramToolTagPayload(match.payload);
-      if (parsed.name === "cron.add") {
-        const descriptor = cronAddDescriptor(parsed.payload);
-        if (descriptor) parsedToolCronDescriptors.set(index, descriptor);
-      }
-    } catch {
-      // The ordinary tool parser below reports malformed JSON.
-    }
-  }
-  const legacyCronDescriptors = cronAddMatches.map((match) => cronAddDescriptor(match.payload));
-  const recurringCronFingerprints = new Set(
-    [...parsedToolCronDescriptors.values(), ...legacyCronDescriptors]
-      .filter((descriptor): descriptor is CronAddDescriptor => descriptor?.mode === "recurring")
-      .map((descriptor) => descriptor.fingerprint)
-      .filter(Boolean),
-  );
-
-  for (const [toolIndex, match] of toolMatches.entries()) {
+  for (const match of toolMatches) {
     let toolName = "unknown";
     try {
       const parsed = parseTelegramToolTagPayload(match.payload);
       toolName = parsed.name;
-      if (parsed.name === "cron.add" && shouldSuppressBoundaryCronAdd(
-        parsedToolCronDescriptors.get(toolIndex),
-        recurringCronFingerprints,
-      )) {
-        await appendLarkCronDeduplicatedTimeline(input, parsed.payload);
-        continue;
-      }
       const toolOk = await executeLarkToolTag({
         ...input,
         name: parsed.name,
@@ -411,12 +384,8 @@ export async function deliverLarkResponse(input: {
     }
   }
 
-  for (const [cronIndex, match] of cronAddMatches.entries()) {
+  for (const match of cronAddMatches) {
     try {
-      if (shouldSuppressBoundaryCronAdd(legacyCronDescriptors[cronIndex], recurringCronFingerprints)) {
-        await appendLarkCronDeduplicatedTimeline(input, match.payload);
-        continue;
-      }
       const toolOk = await executeLarkToolTag({
         ...input,
         name: "cron.add",
@@ -900,67 +869,6 @@ function isCronMutationTool(name: string): boolean {
     || name === "cron.remove"
     || name === "cron.toggle"
     || name === "cron.run";
-}
-
-interface CronAddDescriptor {
-  mode: "recurring" | "one-shot";
-  fingerprint: string;
-}
-
-function cronAddDescriptor(payload: unknown): CronAddDescriptor | undefined {
-  try {
-    const parsed = typeof payload === "string" ? JSON.parse(payload) as unknown : payload;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return undefined;
-    }
-    const body = parsed as Record<string, unknown>;
-    const prompt = typeof body.prompt === "string" ? compactCronText(body.prompt) : "";
-    const description = typeof body.description === "string" ? compactCronText(body.description) : "";
-    const fingerprint = `${prompt}\u0000${description}`;
-    if (body.cron !== undefined && body.cron !== null && body.cron !== "") {
-      return { mode: "recurring", fingerprint };
-    }
-    if ((body.in !== undefined && body.in !== null && body.in !== "")
-      || (body.at !== undefined && body.at !== null && body.at !== "")) {
-      return { mode: "one-shot", fingerprint };
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
-}
-
-function compactCronText(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-}
-
-function shouldSuppressBoundaryCronAdd(
-  descriptor: CronAddDescriptor | undefined,
-  recurringFingerprints: ReadonlySet<string>,
-): boolean {
-  return descriptor?.mode === "one-shot"
-    && descriptor.fingerprint !== "\u0000"
-    && recurringFingerprints.has(descriptor.fingerprint);
-}
-
-async function appendLarkCronDeduplicatedTimeline(
-  input: Parameters<typeof deliverLarkResponse>[0],
-  payload: unknown,
-): Promise<void> {
-  await appendTimelineEventBestEffort(input.stateDir, {
-    type: "cron.skipped",
-    channel: "lark",
-    chatId: input.bridgeChatId,
-    userId: input.bridgeUserId,
-    conversationKey: input.conversationKey,
-    outcome: "skipped",
-    detail: "suppressed duplicate boundary one-shot beside recurring schedule",
-    metadata: {
-      payload: typeof payload === "string" ? payload.slice(0, 500) : payload,
-      larkChatId: input.chatId,
-      larkMessageId: input.larkMessageId ?? input.replyTo,
-    },
-  }, "Lark cron dedupe timeline event");
 }
 
 async function claimLarkArtifactPath(claimed: Set<string>, filePath: string): Promise<boolean> {

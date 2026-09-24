@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -10,7 +10,10 @@ import {
   stripInvalidDeliveryPseudoTags,
 } from "../src/telegram/delivery-tags.js";
 import { deliverLarkResponse } from "../src/lark/delivery.js";
-import { preflightLarkResponseDeliveryDirectives } from "../src/lark/delivery-followup.js";
+import {
+  preflightLarkResponseDeliveryDirectives,
+  renderLarkMergedDeliveryRepairDirectives,
+} from "../src/lark/delivery-followup.js";
 import { createLarkServiceRuntime } from "../src/lark/service.js";
 import type { LarkChannelLike } from "../src/lark/types.js";
 
@@ -55,6 +58,60 @@ describe("Lark delivery protocol guards", () => {
     const result = await preflightLarkResponseDeliveryDirectives(tool("send.batch", { message: "Status only" }));
     expect(result).toMatchObject({ sawDirective: true, artifactCount: 0, issues: [] });
     expect(result.deliveryMessages).toEqual(["Status only"]);
+  });
+
+  it("preserves send.batch messages while merging repaired artifacts", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-repair-message-"));
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-repair-message-outside-"));
+    const workspace = path.join(stateDir, "workspace");
+    const good = path.join(workspace, "good.txt");
+    const repaired = path.join(workspace, "repaired.txt");
+    const outside = path.join(outsideDir, "outside.txt");
+    await mkdir(workspace, { recursive: true });
+    await Promise.all([
+      writeFile(good, "good"),
+      writeFile(repaired, "repaired"),
+      writeFile(outside, "outside"),
+    ]);
+    try {
+      const initial = await preflightLarkResponseDeliveryDirectives(tool("send.batch", {
+        message: "两份报告如下",
+        files: [good, outside],
+      }), { stateDir });
+      const fixed = await preflightLarkResponseDeliveryDirectives(tool("send.batch", {
+        files: [repaired],
+      }), { stateDir });
+      const merged = renderLarkMergedDeliveryRepairDirectives(initial, fixed);
+
+      expect(merged).toContain("两份报告如下");
+      expect(merged).toContain(good);
+      expect(merged).toContain(repaired);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts repeated paths and aliases as one repaired artifact", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-repair-identity-"));
+    const workspace = path.join(stateDir, "workspace");
+    const repaired = path.join(workspace, "repaired.txt");
+    const alias = path.join(workspace, "alias.txt");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(repaired, "repaired");
+    await symlink(repaired, alias);
+    try {
+      const result = await preflightLarkResponseDeliveryDirectives(tool("send.batch", {
+        files: [repaired, repaired, alias],
+      }), { stateDir });
+
+      expect(result).toMatchObject({ artifactCount: 3, issues: [] });
+      expect(result.acceptedArtifacts).toEqual([
+        expect.objectContaining({ path: repaired, kind: "file" }),
+      ]);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("never exposes a pseudo send tag as visible reply text", async () => {
@@ -144,7 +201,7 @@ describe("Lark delivery protocol guards", () => {
     }
   });
 
-  it("keeps multiple recurring and unrelated one-shot schedules while suppressing matching boundary duplicates", async () => {
+  it("keeps recurring and one-shot schedules even when their descriptions match", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-cron-dedupe-"));
     const store = new CronStore(stateDir);
     const runtime = createLarkServiceRuntime({
@@ -166,11 +223,12 @@ describe("Lark delivery protocol guards", () => {
       });
       expect(result.ok).toBe(true);
       const jobs = await store.list();
-      expect(jobs).toHaveLength(3);
+      expect(jobs).toHaveLength(4);
       expect(jobs).toEqual(expect.arrayContaining([
         expect.objectContaining({ cronExpr: "0 10 * * 1", prompt: "weekly summary" }),
         expect.objectContaining({ cronExpr: "0 16 * * 5", prompt: "weekly summary" }),
         expect.objectContaining({ runOnce: true, prompt: "project meeting" }),
+        expect.objectContaining({ runOnce: true, prompt: "weekly summary" }),
       ]));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
