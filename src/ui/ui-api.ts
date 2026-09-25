@@ -15,6 +15,13 @@ import {
 } from "../telegram/instance-config.js";
 import { SessionStore } from "../state/session-store.js";
 import {
+  collectFileInventory,
+  revealFileInventoryUnit,
+  updateFileInventoryLabel,
+  type FileInventoryLabel,
+  type FileInventoryResult,
+} from "./file-inventory.js";
+import {
   listCctbInstances,
   resolveInstanceStateDir,
   type CctbInstanceSummary,
@@ -37,6 +44,12 @@ export interface UiApiDeps {
     stateDir: string,
     updater: (config: Record<string, unknown>) => void,
   ) => Promise<void>;
+  collectFileInventory?: (env: UiApiEnv) => Promise<FileInventoryResult>;
+  updateFileInventoryLabel?: (
+    env: UiApiEnv,
+    input: { unitId: string; category?: unknown; important?: unknown; note?: unknown },
+  ) => Promise<FileInventoryLabel | null>;
+  revealFileInventoryUnit?: (env: UiApiEnv, unitId: string) => Promise<boolean>;
 }
 
 /** Fields the UI may edit. Anything else in the body is ignored (never trusted). */
@@ -115,10 +128,58 @@ export async function handleUiApiRequest(
   env: UiApiEnv,
   deps: UiApiDeps = {},
 ): Promise<UiApiResult> {
+  const collectInventory = () => (deps.collectFileInventory ?? ((targetEnv) => collectFileInventory(targetEnv, {
+    isProcessAlive: deps.isProcessAlive,
+  })))(env);
+
   // GET /api/instances — list every instance with config + running state.
   if (method === "GET" && pathname === "/api/instances") {
     const instances = await listCctbInstances(env, deps.isProcessAlive);
     return ok({ instances: instances.map(summaryToJson) });
+  }
+
+  if (pathname === "/api/files") {
+    if (method !== "GET") return error(405, "method not allowed");
+    return ok(await collectInventory());
+  }
+
+  if (pathname === "/api/files/labels") {
+    if (method !== "POST" && method !== "PUT") return error(405, "method not allowed");
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return error(400, "body must be a JSON object");
+    }
+    const input = body as Record<string, unknown>;
+    if (typeof input.unitId !== "string") return error(400, "unitId is required");
+    try {
+      const label = await (deps.updateFileInventoryLabel ?? updateFileInventoryLabel)(env, {
+        unitId: input.unitId,
+        ...(Object.prototype.hasOwnProperty.call(input, "category") ? { category: input.category } : {}),
+        ...(Object.prototype.hasOwnProperty.call(input, "important") ? { important: input.important } : {}),
+        ...(Object.prototype.hasOwnProperty.call(input, "note") ? { note: input.note } : {}),
+      });
+      let inventory: FileInventoryResult | undefined;
+      try {
+        inventory = await collectInventory();
+      } catch {
+        // The label is already durably saved. The UI can retain the local
+        // patch and retry its normal background refresh.
+      }
+      return ok({ unitId: input.unitId, label, ...(inventory ? { inventory } : {}) });
+    } catch (cause) {
+      return error(400, cause instanceof Error ? cause.message : "invalid file label");
+    }
+  }
+
+  if (pathname === "/api/files/reveal") {
+    if (method !== "POST") return error(405, "method not allowed");
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return error(400, "body must be a JSON object");
+    }
+    const unitId = (body as Record<string, unknown>).unitId;
+    if (typeof unitId !== "string") return error(400, "unitId is required");
+    const revealed = await (deps.revealFileInventoryUnit ?? ((targetEnv, targetUnitId) =>
+      revealFileInventoryUnit(targetEnv, targetUnitId, { isProcessAlive: deps.isProcessAlive })))(env, unitId);
+    return revealed ? ok({ unitId, revealed: true }) : error(404, "file unit not found or Finder is unavailable");
   }
 
   const configMatch = pathname.match(/^\/api\/instances\/([^/]+)\/config$/);
