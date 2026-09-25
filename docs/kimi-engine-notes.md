@@ -44,6 +44,49 @@ ACP was verified to provide:
 This is sufficient to build the adapter without simulating unavailable Kimi
 features.
 
+## Kimi 2.1.1 Compatibility Re-probe
+
+- Probe date: 2026-09-25
+- Binary: `~/.kimi-code/bin/kimi`
+- Version: `2.1.1`
+- Integration protocol: persistent `kimi acp`
+- Client SDK: `@agentclientprotocol/sdk@1.4.0`
+
+The 2.0.1-to-2.1.1 source comparison spans 40 commits. The public
+`packages/acp-server` tree and the Hook event surface consumed by TaroCub have
+no diff. The relevant upstream changes are internal: session/history fixes,
+agent-core task and tool-policy changes, lower CLI startup cost, and filesystem
+watcher defaults. Kimi 2.1.0 briefly added post-trust realpath restrictions
+that could affect files reached through workspace symlinks, including
+TaroCub's shared Skills path; 2.1.1 explicitly rolls those restrictions back.
+Filesystem watchers are on by
+default again and can still be disabled with `KIMI_CODE_WATCH=0`.
+
+The installed 2.1.1 binary was exercised through TaroCub's real adapter:
+
+- `session/new`, `session/list`, cross-process `session/load`, and a resumed
+  turn preserved exact response and memory markers;
+- cancelling an active turn returned the stopped-turn error and the same
+  persistent worker completed the next turn;
+- a required single-select plus required multi-select `AskUserQuestion` form
+  round-tripped its structured answers;
+- a project `.kimi-code/skills` symlink to an external shared Skills directory
+  loaded and invoked the expected Skill;
+- `mcp__cctb_search__provider_status` remained discoverable and callable;
+- a detached Bash task emitted one Hook-derived start and one matching terminal
+  notification, while its exact file output was preserved.
+
+TaroCub does not override the restored watcher default: native config, Skill,
+MCP, and instruction changes should continue to reload while a persistent Kimi
+worker is alive. Idle-worker reaping already bounds the lifetime of those
+watchers. No adapter compatibility shim or service configuration change is
+required. See the
+[2.1.1 release](https://github.com/MoonshotAI/kimi-code/releases/tag/%40moonshot-ai%2Fkimi-code%402.1.1)
+and the
+[trust-boundary rollback](https://github.com/MoonshotAI/kimi-code/pull/4013).
+After the live probes, the focused Kimi adapter, Hook relay, and workspace
+suites passed all 108 tests, and the TypeScript build passed.
+
 ## Kimi 2.0.1 Compatibility Re-probe
 
 - Probe date: 2026-09-19
@@ -814,6 +857,9 @@ covered by integration tests for a Kimi-configured instance:
 - Kimi 2.0.1 new/list/load plus a resumed turn, the changed `yolo` permission
   branch, Hook background lifecycle, Search MCP, full form elicitation,
   cancellation and worker reuse, and main plus subagent image reading;
+- Kimi 2.1.1 new/list/load plus a resumed turn, cancellation and worker reuse,
+  full form elicitation, external symlinked Skills, Search MCP, and Hook
+  background lifecycle;
 - Kimi 2.0.0 cancellation followed by reuse of the same persistent worker and
   local image reading through the ordinary attachment path;
 - native workspace instructions, local skills, and the injected TaroCub Search

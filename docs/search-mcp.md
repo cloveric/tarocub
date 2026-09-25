@@ -113,12 +113,12 @@ keys are never copied into Kimi config. Explicit `BRAVE_API_KEY` /
 server can reuse those same keys from an existing local Codex
 `[mcp_servers.<name>.env]` configuration without logging them.
 
-The current compatibility baseline is Kimi Code 2.0.1. ACP new/list/load and a
-resumed turn were re-verified on 2.0.1, together with a real
-`mcp__cctb_search__provider_status` call and object-valued result. The public
-ACP server and MCP registration surface are unchanged from 2.0.0; 2.0.1 only
-changes how workspace MCP files are watched, and the real bridge-injected
-server remained discoverable and callable. TaroCub does not silently retry
+The current compatibility baseline is Kimi Code 2.1.1. ACP new/list/load and a
+resumed turn were re-verified on 2.1.1, together with a real
+`mcp__cctb_search__provider_status` call. The public ACP server and MCP
+registration surface remain unchanged; the real bridge-injected server stayed
+discoverable and callable across the 2.1.x internal session, tool-policy, and
+watcher changes. TaroCub does not silently retry
 without stdio MCPs: an initialization failure is surfaced so missing search
 capability cannot be mistaken for a healthy session. Kimi 0.43 supports deferred MCP tool
 definitions, but TaroCub deliberately keeps `cctb_search` inline so the model

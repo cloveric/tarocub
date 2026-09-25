@@ -198,20 +198,17 @@ override that retains Kimi's `${base_prompt}` and `${plugin_sections}`. It also
 exposes local Codex skills to bridge-owned Kimi workspaces and injects the
 built-in Search MCP alongside Kimi's native MCP/plugins.
 
-The current compatibility baseline is **Kimi Code 2.0.1** with
-`@agentclientprotocol/sdk` 1.4.0. The public `kimi acp` entry point and
-`packages/acp-server` tree are unchanged from 2.0.0, while 2.0.1 does change
-internal permission, Hook-runner, Wire/history, media-tool, session-index, and
-workspace-watcher code. TaroCub's real adapter therefore re-verified the
-affected behavior rather than inferring compatibility from the entry point:
-new/list/load plus a resumed turn, an unanalyzable harmless Bash command under
-ACP `yolo` with zero approval requests, exactly one Hook start and terminal
-event for a background Bash task, Search MCP object output, a two-field
-multi-select form, cancellation followed by worker reuse, and image reading by
-both the main agent and a delegated subagent. Hook input event names and
-payloads consumed by TaroCub are unchanged; the upstream runner only adds
-telemetry and an internal `errored` result flag. No compatibility shim is
-required. Kimi
+The current compatibility baseline is **Kimi Code 2.1.1** with
+`@agentclientprotocol/sdk` 1.4.0. The public `packages/acp-server` tree and Hook
+event surface consumed by TaroCub remain unchanged. TaroCub's real adapter
+re-verified new/list/load plus a resumed turn, cancellation followed by worker
+reuse, exactly one Hook start and terminal event for a background Bash task,
+Search MCP discovery, a two-field multi-select form, and external symlinked
+Skills. Kimi 2.1.1 rolls back 2.1.0's post-trust realpath restrictions, so the
+bridge-owned `.kimi-code/skills` link remains supported. Its restored default
+filesystem watchers are left enabled so native config, Skill, MCP, and
+instruction changes can reload while a persistent worker is alive. No
+compatibility shim is required. Kimi
 0.43's standard ACP form elicitation was verified end to end with two
 questions, including multi-select and distinct display labels/wire values.
 Older permission-style single-choice requests remain supported as a
