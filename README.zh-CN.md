@@ -24,7 +24,7 @@
 
 <p align="center">
   <a href="https://my.feishu.cn/docx/L5qZd4rfIok8CnxuvfCcatPrnYf"><strong>📖 飞书图文版</strong></a>&nbsp;&nbsp;|&nbsp;&nbsp;
-  <a href="#先从这里开始">先从这里开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#它能给你什么">能做什么</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#产品边界">产品边界</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#核心工作流">核心工作流</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#实时网页搜索-mcpbrave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
+  <a href="#先从这里开始">先从这里开始</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#它能给你什么">能做什么</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#网页控制台与文件中心">文件中心</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#产品边界">产品边界</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#核心工作流">核心工作流</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#实时网页搜索-mcpbrave--tavily">Search MCP</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#agent-bus">Agent Bus</a>&nbsp;&nbsp;|&nbsp;&nbsp;<a href="#服务运维">运维</a>
 </p>
 
 ## 先从这里开始
@@ -81,10 +81,31 @@ TaroCub 仍会识别以旧包名 `tarocub-deepseek-harness-plugin` 安装的版�
 | **飞书/Lark 原生工作面** | 交互卡片、审批、Docs 评论、Sheets/Docs/Drive、群聊与 thread 工作流都走同一套 bridge runtime。 |
 | **可选 Telegram 兼容通道** | 已有个人 bot 仍可继续使用文字、文件、图片、语音、审批、cron 和多 bot 运维。 |
 | **稳定的长任务运维** | cron、audit、timeline、usage tracking、访问控制和服务重启都由 bridge 管，不塞进模型记忆。 |
+| **网页控制台与文件中心** | 在本机浏览器查看 Bot 配置和文件占用；按 Bot、类型、状态、大小与时间搜索筛选，并标注重要性、标签和备注。 |
 | **可追溯网页研究** | 可选 Brave/Tavily MCP 提供 `web_search`、`web_extract`、provider status、fallback notice 和 source log。 |
 | **多 agent 编排** | Agent Bus 做实例间 delegation，Mini Bus 做 topic 间协作，Board 做持久化 Kanban 任务。 |
 | **飞书/Lark 通道（推荐）** | 通过官方 Lark Channel SDK 复用同一个 bridge runtime，支持 streaming card、停止按钮、审批和文件/媒体投递标签。 |
 | **视频会议 Bot（实验性）** | 在灰度能力与权限就绪后，可加入会议、跟随实时字幕、会中问答、邀请成员，并通过带 `confirm` 的命令结束 Bot 主持的会议；默认关闭。 |
+
+## 网页控制台与文件中心
+
+在 TaroCub 仓库目录运行：
+
+```bash
+npm run dev -- ui
+```
+
+终端会打印一个带临时访问令牌的本机地址，例如
+`http://127.0.0.1:<端口>/?token=...`。把完整地址复制到浏览器打开，再点
+**文件中心**。页面使用期间需要保持该终端进程运行；按 `Ctrl-C` 即可关闭。
+本项目没有安装全局 `cctb` 命令，因此不要使用 `cctb ui`。
+
+控制台包含两个页面：
+
+- **Bot 配置**：集中查看本机所有实例，并修改允许编辑的安全配置；运行中的 Bot 会在下次重启时应用修改。
+- **文件中心**：盘点各 Bot 的状态目录和工作区，按 Bot、类型、状态、大小、更新时间展示存储单元，并提供搜索、筛选、标签、备注、重要标记及 macOS Finder 定位。
+
+文件中心只负责“看清楚和做标注”，不会删除、移动、归档、去重或自动清理任何文件。浏览器登录态会标为“受保护”，近期仍在写入的目录会标为“正在使用”；“临时内容”和“可重建”也只是判断提示，不代表可以直接删除。
 
 ## 飞书 / Lark 通道（推荐）
 

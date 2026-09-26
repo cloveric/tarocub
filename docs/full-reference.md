@@ -923,15 +923,19 @@ npm run dev -- telegram instance delete staging --yes          # Delete (require
 
 ---
 
-## Web Config Console (`cctb ui`)
+## Web Console and File Center (`npm run dev -- ui`)
 
-A local, read-mostly web console for looking over every instance at once and
-editing the safe subset of config fields (`engine`, `model`, `effort`,
-`locale`, `verbosity`, `budgetUsd`).
+A local web console for looking over every instance at once, editing the safe
+subset of config fields (`engine`, `model`, `effort`, `locale`, `verbosity`,
+`budgetUsd`), and inspecting bot-created, downloaded, and workspace files.
 
 ```bash
-npm run dev -- ui        # starts the console and opens the browser; Ctrl-C to stop
+npm run dev -- ui        # prints a secure local URL; Ctrl-C to stop
 ```
+
+Open the complete token-bearing URL printed by the command, then choose **Bot
+Config** or **File Center**. There is no globally installed `cctb` executable,
+so `cctb ui` is not a supported launch command.
 
 - **Local only.** Binds `127.0.0.1` on an ephemeral port. Every request —
   including the HTML shell — requires a per-process token (constant-time
@@ -944,6 +948,13 @@ npm run dev -- ui        # starts the console and opens the browser; Ctrl-C to s
 - **Discovery.** Instances are found by scanning `~/.cctb/`; each row shows the
   configured engine/model and whether a service currently holds the lock (pid
   liveness).
+- **Read-only File Center.** Storage units are grouped by bot, type, status,
+  size, and age, with search, filters, labels, notes, importance marking, and
+  Finder reveal on macOS. Protected browser profiles and recently active paths
+  are called out explicitly.
+- **No cleanup API.** File Center does not delete, move, archive, deduplicate,
+  or automatically clean files. Labels such as temporary or rebuildable are
+  decision aids, not permission to remove data.
 
 ---
 

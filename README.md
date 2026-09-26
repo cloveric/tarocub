@@ -28,6 +28,7 @@
   <a href="https://my.feishu.cn/docx/L5qZd4rfIok8CnxuvfCcatPrnYf"><strong>📖 Feishu Doc (飞书图文)</strong></a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#quick-start">Quick Start</a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#surfaces">Surfaces</a>&nbsp;&nbsp;|&nbsp;&nbsp;
+  <a href="#web-console-and-file-center">File Center</a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#core-highlights">Core Highlights</a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#lark-setup">Lark Setup</a>&nbsp;&nbsp;|&nbsp;&nbsp;
   <a href="#operator-commands">Commands</a>&nbsp;&nbsp;|&nbsp;&nbsp;
@@ -136,6 +137,31 @@ npm run dev -- telegram access pair <pairing-code>
 | **Feishu/Lark** | Team chat, interactive cards, Docs comments, Sheets/Docs/Drive workflows, group/thread workflows | **Recommended** — the primary, actively-developed channel |
 | **Telegram** | Mobile control, voice input, file delivery, multi-bot operations, cron, Agent Bus | Fully supported; longest-tested, but no longer the day-to-day focus |
 | **Local CLI** | Operations, setup, debugging, status, backups, direct sends | First-class operator interface |
+| **Local web console** | Instance settings and a read-only inventory of bot-created, downloaded, and workspace files | Loopback-only and token-gated |
+
+## Web Console and File Center
+
+Start the local console from the repository checkout:
+
+```bash
+npm run dev -- ui
+```
+
+The command prints a one-time, token-bearing loopback URL such as
+`http://127.0.0.1:<port>/?token=...`. Open the complete URL in a browser, then
+select **File Center**. Keep the terminal process running while the page is in
+use; press `Ctrl-C` to stop it. The private package does not install a global
+`cctb` executable, so `cctb ui` is not a supported launch command.
+
+The console has two views:
+
+- **Bot Config** lists every local instance and edits the safe configuration subset with next-restart semantics.
+- **File Center** scans configured bot state and workspaces, groups storage units by bot, type, status, size, and age, and supports search, filters, labels, notes, importance marking, and Finder reveal on macOS.
+
+File Center is deliberately non-destructive. It highlights protected browser
+profiles, recently active paths, rebuildable environments, temporary content,
+and items that still need human judgment, but it never deletes, moves, archives,
+deduplicates, or automatically cleans files.
 
 ## Core Highlights
 
@@ -158,7 +184,7 @@ npm run dev -- telegram access pair <pairing-code>
 | **Board** | Durable Kanban state for tasks, model-assisted planning, dependencies, WIP, review gates, workspaces, heartbeats, stale-run recovery, Lark task cards, and execution history. |
 | **Search MCP** | Optional Brave/Tavily MCP gives source-traceable `web_search`, `web_extract`, provider status, fallback notices, and source logs. |
 | **Operational visibility** | `status`, `doctor`, `timeline`, `audit`, `dashboard`, usage tracking, service locks, and backups make failures inspectable instead of mysterious. |
-| **Web config console** | `cctb ui` opens a loopback-only, token-gated web console that lists every instance (engine, model, service liveness) and edits the safe config subset on disk with next-restart semantics. |
+| **Web console and File Center** | `npm run dev -- ui` starts a loopback-only, token-gated console for safe instance configuration and a read-only, filterable inventory of bot files and storage usage. |
 | **VC meeting attendance (experimental)** | On Feishu/Lark, the bot can join a video meeting, follow the live transcript, answer when addressed, invite participants, and explicitly end a hosted meeting (`/meeting join/status/ask/leave/invite/end`). Off by default; requires Feishu's bot-join beta allowlist. |
 
 ## Feature Map
@@ -178,7 +204,7 @@ npm run dev -- telegram access pair <pairing-code>
 | Mini Bus topic/thread workflows | Lark threads | Telegram topics | Inspect state |
 | Docs comments and Sheets workflows | Yes, with `lark-cli` | Not applicable | Provision/auth/doctor |
 | VC meeting attendance (gated beta) | `/meeting` commands | Not applicable | Config + preflight |
-| Web config console | — | — | `cctb ui` (loopback + token) |
+| Web console and File Center | — | — | `npm run dev -- ui` (loopback + token) |
 | Timeline, audit, dashboard, usage | Yes | Yes | Primary ops surface |
 
 ### Kimi Code engine
