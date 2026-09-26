@@ -16215,6 +16215,60 @@ describe("lark service", () => {
     expect(runtime.pendingApprovals.size).toBe(0);
   });
 
+  it("replaces an invalid managed AskUserQuestion form with a fresh submit-capable card", async () => {
+    const runtime = createLarkServiceRuntime();
+    let cardNumber = 0;
+    let messageNumber = 0;
+    const create = vi.fn(async () => ({ data: { card_id: `card_aqq_${++cardNumber}` } }));
+    const update = vi.fn(async () => ({ data: {} }));
+    const messageReply = vi.fn(async () => ({ data: { message_id: `om_form_${++messageNumber}` } }));
+    const channel = fakeChannel({
+      rawClient: {
+        cardkit: { v1: { card: { create, update } } },
+        im: { v1: { message: { reply: messageReply } } },
+      },
+    });
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: { questions: [{ question: "Mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast" }] }] },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+    await vi.waitFor(() => expect(runtime.pendingApprovals.get(requestId)?.managedCard?.cardId).toBe("card_aqq_1"));
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_form_1", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: {} } },
+    });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(messageReply).toHaveBeenCalledTimes(2);
+    expect(runtime.pendingApprovals.get(requestId)?.managedCard?.cardId).toBe("card_aqq_2");
+    expect(channel.send).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(1), { timeout: 2000 });
+    const retiredCard = JSON.stringify(update.mock.calls[0]);
+    expect(retiredCard).toContain("card_aqq_1");
+    expect(retiredCard).toContain("请填写新表单");
+    expect(retiredCard).not.toContain("form_submit");
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: { chatId: "oc_chat", messageId: "om_form_2", operator: { openId: "ou_user" },
+        action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: { q0_other: "No image" } } },
+    });
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    expect(resolved.updatedInput.answers).toEqual({ "Mode?": "No image" });
+    await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    const submittedCard = JSON.stringify(update.mock.calls[1]);
+    expect(submittedCard).toContain("card_aqq_2");
+    expect(submittedCard).toContain("已提交");
+    expect(runtime.pendingApprovals.size).toBe(0);
+  });
+
   it("updates the AskUserQuestion form in place via CardKit (no recall) when managed cards work", async () => {
     const runtime = createLarkServiceRuntime();
     const create = vi.fn(async () => ({ data: { card_id: "card_aqq" } }));
@@ -16366,14 +16420,17 @@ describe("lark service", () => {
       } satisfies EngineApprovalRequest,
     });
     const requestId = [...runtime.pendingApprovals.keys()][0]!;
+    await vi.waitFor(() => expect(channel.send).toHaveBeenCalledTimes(1));
 
-    // Submit with nothing selected → must NOT resolve; should re-prompt.
+    // Submit with nothing selected → must NOT resolve; should send a fresh form
+    // instead of reusing the client-locked card.
     await handleLarkCardAction({
       channel, runtime,
       event: { chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
         action: { value: { cctb_lark: "ask_user_question", action: "form_submit", requestId }, form_value: {} } },
     });
     expect(runtime.pendingApprovals.size).toBe(1);
+    expect(channel.send).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(channel.send.mock.calls)).toContain("请先选择");
 
     // A real selection then resolves.
@@ -16387,11 +16444,9 @@ describe("lark service", () => {
     expect(runtime.pendingApprovals.size).toBe(0);
   });
 
-  it("recovers AskUserQuestion answers from the raw event when the SDK drops action.form_value", async () => {
-    // The SDK's normalizeCardAction keeps only { value, tag, name, option } and
-    // discards action.form_value, so a real form submit arrives with the picks
-    // ONLY on the raw event body (channel created with includeRawEvent). Without
-    // recovery this re-prompts "请先选择" forever and the run card never resolves.
+  it("recovers AskUserQuestion answers from raw events produced by unpatched SDK installs", async () => {
+    // Keep raw-event recovery for old SDK installs and alternate callback
+    // adapters even though TaroCub's postinstall patch now preserves form_value.
     const runtime = createLarkServiceRuntime();
     const channel = fakeChannel();
     const pending = requestLarkApproval({
@@ -16418,6 +16473,43 @@ describe("lark service", () => {
     expect(resolved.updatedInput.answers).toEqual({ "Mode?": "Careful" });
     expect(runtime.pendingApprovals.size).toBe(0);
     expect(JSON.stringify(channel.send.mock.calls)).not.toContain("请先选择");
+  });
+
+  it("recovers stringified AskUserQuestion form values from nested callback envelopes", async () => {
+    const runtime = createLarkServiceRuntime();
+    const channel = fakeChannel();
+    const pending = requestLarkApproval({
+      channel, runtime, chatId: "oc_chat", replyTo: "om_1",
+      request: {
+        engine: "claude",
+        toolName: "AskUserQuestion",
+        toolInput: { questions: [{ question: "Mode?", header: "Mode", multiSelect: false, options: [{ label: "Fast" }] }] },
+      } satisfies EngineApprovalRequest,
+    });
+    const requestId = [...runtime.pendingApprovals.keys()][0]!;
+    const callbackValue = { cctb_lark: "ask_user_question", action: "form_submit", requestId };
+
+    await handleLarkCardAction({
+      channel, runtime,
+      event: {
+        chatId: "oc_chat", messageId: "om_card", operator: { openId: "ou_user" },
+        action: { value: callbackValue },
+        raw: {
+          data: {
+            event: {
+              action: {
+                value: callbackValue,
+                form_value: JSON.stringify({ askq_form: { q0: "", q0_other: "No image" } }),
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const resolved = await pending as { updatedInput: { answers: Record<string, string> } };
+    expect(resolved.updatedInput.answers).toEqual({ "Mode?": "No image" });
+    expect(runtime.pendingApprovals.size).toBe(0);
   });
 
   it("accepts the free-text Other answer when no option is picked", async () => {

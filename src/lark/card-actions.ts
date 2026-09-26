@@ -493,6 +493,27 @@ function renderLarkAskUserQuestionSubmittedCard(
   };
 }
 
+/** Terminal replacement for an invalid form after a fresh retry card is sent. */
+function renderLarkAskUserQuestionRetrySentCard(notice: string, locale: Locale): Record<string, unknown> {
+  const title = locale === "en" ? "Please complete the new form" : "请填写新表单";
+  const guidance = locale === "en"
+    ? "This form is no longer active. A fresh form was sent below so Submit works normally."
+    : "这张表单已停用。下方已发送一张新表单，请在那里填写并提交。";
+  return {
+    schema: "2.0",
+    config: { update_multi: true, summary: { content: title } },
+    header: { title: { tag: "plain_text", content: title } },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 12px 12px",
+      elements: [
+        { tag: "markdown", content: `<font color="red">${notice}</font>` },
+        { tag: "markdown", content: guidance },
+      ],
+    },
+  };
+}
+
 /**
  * Read-only replacement for a pending card whose 29-minute wait expired. The
  * form/buttons visually "die" in place — without this the expired card kept
@@ -815,10 +836,14 @@ export async function handleLarkCardAction(input: {
       value: unknown;
       form_value?: unknown;
       formValue?: unknown;
+      input_value?: unknown;
+      inputValue?: unknown;
+      option?: unknown;
+      options?: unknown;
     };
     // Full raw Feishu event (present when the channel is created with
-    // includeRawEvent). The SDK's normalizeCardAction drops action.form_value,
-    // so a Card 2.0 form submit's per-field values are only recoverable here.
+    // includeRawEvent). This remains the compatibility source for SDK installs
+    // that have not applied TaroCub's normalizeCardAction field patch.
     raw?: unknown;
   };
 }): Promise<boolean> {
@@ -1257,7 +1282,8 @@ export async function handleLarkCardAction(input: {
 
     const replyOpts = larkReplyOptions(input.event.messageId, pending.replyInThread ?? replyInThread);
     const questions = normalizeAskUserQuestions(pending.askUserQuestionInput);
-    const formValue = larkCardActionFormValue(input.event);
+    const formInspection = inspectLarkCardActionFormValue(input.event);
+    const formValue = formInspection.value;
     const selectedCounts = questions.map((question, index) => {
       const selected = askFormSelectedValues(formValue[askFormFieldName(index)]).length;
       const other = pending.approvalEngine === "kimi"
@@ -1291,6 +1317,11 @@ export async function handleLarkCardAction(input: {
           requestId: value.requestId,
           questions: questions.length,
           answeredFields: Object.keys(formValue).filter((key) => askFormSelectedValues(formValue[key]).length > 0),
+          formFields: Object.keys(formValue).sort(),
+          formValueSource: formInspection.source,
+          formValueCandidates: formInspection.candidatePaths,
+          normalizedActionFields: Object.keys(input.event.action).sort(),
+          rawTopLevelFields: Object.keys(objectValue(input.event.raw) ?? {}).sort().slice(0, 32),
         },
       });
     };
@@ -1352,14 +1383,10 @@ export async function handleLarkCardAction(input: {
     // Backstop for clients that don't enforce the form's `required`: a
     // required question must have an answer, including a required multi-select.
     //
-    // Re-prompting with a plain text message is NOT enough. The client holds a
-    // post-submit lock on the card (the same lock settleThenUpdateManagedCard
-    // exists to work around on the success path), and it is only released when
-    // the server pushes an update. Leaving the card untouched here stranded the
-    // form: the user picked the missing answer, pressed 提交 again, and that
-    // second submit never left the client — "I selected it and it still won't
-    // go through". So re-render the form IN PLACE, carrying the picks already
-    // made so nothing has to be redone.
+    // Re-prompting with a plain text message is NOT enough. The client locks a
+    // submitted card, and even an in-place re-render can leave the replacement
+    // form looking editable while a second Submit emits no callback. The branch
+    // below therefore sends a fresh card and carries over any picks we received.
     const missingRequired = questions.filter((question, index) => (
       question.required && selectedCounts[index] === 0 && !(answers[question.question] ?? "").trim()
     ));
@@ -1400,22 +1427,34 @@ export async function handleLarkCardAction(input: {
         selections: formValue,
         notice,
       });
-      const postRetryFallback = async (): Promise<void> => {
-        // No managed card, or the in-place update failed: a fresh interactive
-        // card is the only way back to a form the user can actually submit.
+      // A submitted card can remain client-locked even after an in-place update:
+      // the retry looks editable, but a second click never emits a callback. Do
+      // not reuse it. Send a brand-new card, then retire the old managed card.
+      const previousManagedCard = pending.managedCard;
+      const retryInThread = pending.replyInThread ?? replyInThread;
+      const managedRetry = await sendManagedCard(input.channel, input.event.chatId, retryCard, {
+        ...(pending.replyTo ? { replyTo: pending.replyTo } : {}),
+        ...(retryInThread ? { replyInThread: true } : {}),
+      });
+      if (managedRetry) {
+        pending.managedCard = managedRetry;
+      } else {
         await sendLarkCardWithFallback({
           channel: input.channel,
           chatId: input.event.chatId,
           card: retryCard,
           fallbackText: notice,
-          options: (pending.replyInThread ?? replyInThread) ? { replyInThread: true } : undefined,
+          options: larkReplyOptions(pending.replyTo, retryInThread),
           locale,
         });
-      };
-      if (pending.managedCard) {
-        settleThenUpdateManagedCard(input.channel, pending.managedCard, retryCard, postRetryFallback);
-      } else {
-        await postRetryFallback();
+        delete pending.managedCard;
+      }
+      if (previousManagedCard) {
+        settleThenUpdateManagedCard(
+          input.channel,
+          previousManagedCard,
+          renderLarkAskUserQuestionRetrySentCard(notice, locale),
+        );
       }
       await logCardSubmit("rejected", "choice_invalid_selection_count");
       return true;
@@ -2993,50 +3032,101 @@ function buildSuspendedPreviousSnapshot(input: {
   };
 }
 
-function actionFormValue(action: { form_value?: unknown; formValue?: unknown }): Record<string, unknown> | undefined {
-  const raw = action.form_value ?? action.formValue;
-  return actionValue(raw) ?? undefined;
+type LarkCardActionFormEvent = {
+  action: { form_value?: unknown; formValue?: unknown };
+  raw?: unknown;
+};
+
+type LarkCardActionFormInspection = {
+  value: Record<string, unknown>;
+  source?: string;
+  candidatePaths: string[];
+};
+
+function normalizeLarkFormValue(raw: unknown): Record<string, unknown> | null {
+  const parsed = actionValue(raw);
+  if (!parsed) {
+    return null;
+  }
+  // Some callback adapters retain the form name as one extra object layer.
+  // Native Feishu callbacks are flat, but accepting both shapes is harmless for
+  // our two known forms and avoids another client/SDK-specific dead submit.
+  for (const formName of ["askq_form", "lark_config_form"]) {
+    const nested = objectValue(parsed[formName]);
+    if (nested) {
+      return nested;
+    }
+  }
+  return parsed;
 }
 
 /**
- * Form-field values for a Card 2.0 form submit. The SDK's `normalizeCardAction`
- * keeps only `{ value, tag, name, option }` and discards `action.form_value`, so
- * the per-question picks must be recovered from the raw Feishu event body
- * (attached as `event.raw` when the channel is created with `includeRawEvent`).
- * Falls back across the possible raw nestings, then to the normalized action.
+ * Form-field values for a Card 2.0 form submit. TaroCub patches the SDK to keep
+ * `action.form_value`, but also recovers it from the raw Feishu event body for
+ * old installs and alternate callback envelopes.
  */
-function larkCardActionFormValue(event: {
-  action: { form_value?: unknown; formValue?: unknown };
-  raw?: unknown;
-}): Record<string, unknown> {
-  const fromAction = actionFormValue(event.action);
-  if (fromAction && Object.keys(fromAction).length > 0) {
-    return fromAction;
-  }
-  for (const candidate of larkRawCardActionContainers(event.raw)) {
-    const formValue = candidate.form_value ?? candidate.formValue;
-    const parsed = actionValue(formValue);
-    if (parsed && Object.keys(parsed).length > 0) {
-      return parsed;
-    }
-  }
-  return fromAction ?? {};
+function larkCardActionFormValue(event: LarkCardActionFormEvent): Record<string, unknown> {
+  return inspectLarkCardActionFormValue(event).value;
 }
 
-/** Possible locations of `action` within the raw Feishu card-action event. */
-function larkRawCardActionContainers(raw: unknown): Array<{ form_value?: unknown; formValue?: unknown }> {
-  const containers: Array<{ form_value?: unknown; formValue?: unknown }> = [];
-  const root = objectValue(raw);
-  if (!root) {
-    return containers;
-  }
-  const candidates = [objectValue(root.action), objectValue(objectValue(root.event)?.action)];
-  for (const candidate of candidates) {
-    if (candidate) {
-      containers.push(candidate as { form_value?: unknown; formValue?: unknown });
+/**
+ * Locate form_value without assuming which event envelope the SDK retained.
+ * The walk is deliberately bounded and never records values; diagnostics only
+ * expose structural paths and form field names.
+ */
+function inspectLarkCardActionFormValue(event: LarkCardActionFormEvent): LarkCardActionFormInspection {
+  const candidates: Array<{ path: string; value: Record<string, unknown> }> = [];
+  const candidatePaths = new Set<string>();
+  const addCandidate = (path: string, raw: unknown): void => {
+    const parsed = normalizeLarkFormValue(raw);
+    if (!parsed || candidatePaths.has(path)) {
+      return;
+    }
+    candidatePaths.add(path);
+    candidates.push({ path, value: parsed });
+  };
+
+  addCandidate("action.form_value", event.action.form_value);
+  addCandidate("action.formValue", event.action.formValue);
+
+  const queue: Array<{ value: unknown; path: string; depth: number }> = [
+    { value: event.raw, path: "raw", depth: 0 },
+  ];
+  const visited = new Set<object>();
+  let visitedNodes = 0;
+  while (queue.length > 0 && visitedNodes < 128) {
+    const current = queue.shift()!;
+    if (!current.value || typeof current.value !== "object") {
+      continue;
+    }
+    if (visited.has(current.value as object)) {
+      continue;
+    }
+    visited.add(current.value as object);
+    visitedNodes += 1;
+
+    const entries = Array.isArray(current.value)
+      ? current.value.map((value, index) => [String(index), value] as const)
+      : Object.entries(current.value as Record<string, unknown>);
+    for (const [key, value] of entries) {
+      const path = `${current.path}.${key}`;
+      if (key === "form_value" || key === "formValue") {
+        addCandidate(path, value);
+        continue;
+      }
+      if (current.depth < 6 && value && typeof value === "object") {
+        queue.push({ value, path, depth: current.depth + 1 });
+      }
     }
   }
-  return containers;
+
+  const selected = candidates.find((candidate) => Object.keys(candidate.value).length > 0)
+    ?? candidates[0];
+  return {
+    value: selected?.value ?? {},
+    source: selected?.path,
+    candidatePaths: [...candidatePaths],
+  };
 }
 
 function actionValue(value: unknown): Record<string, unknown> | null {
