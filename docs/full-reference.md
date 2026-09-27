@@ -105,6 +105,7 @@ Optional environment:
 |---|---|
 | `CCTB_LARK_INSTANCE` | Lark-specific instance selector. If `CCTB_LARK_STATE_DIR` is unset, non-default names use `~/.cctb/<name>` so each Feishu/Lark bot can have its own `lark.env`. |
 | `CCTB_LARK_STATE_DIR` | Explicit state/workspace directory for the Lark service. Defaults to `~/.cctb/lark`, or `~/.cctb/<CCTB_LARK_INSTANCE>` when the Lark-specific instance selector is set. |
+| `CCTB_LARK_ALLOW_ANY_FILE_PATH` | Opt-in per instance. Set to `1` in that instance's `lark.env` and restart to allow delivery from any readable absolute path. Credential-shaped files remain blocked. |
 | `TAROCUB_INSTANCE` | Shared runtime instance name used by engine config. Lark prefers `CCTB_LARK_INSTANCE` when both are set; old `lark.env` files with `CODEX_TELEGRAM_INSTANCE` are read and rewritten on the next service start. |
 | `LARK_DOMAIN` | Override Lark/Feishu API domain when needed. |
 | `LARK_REQUIRE_MENTION_IN_GROUP` | Defaults to `true`; group messages must mention the bot unless the specific chat is switched with `/group all`. |

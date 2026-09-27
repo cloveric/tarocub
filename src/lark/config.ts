@@ -24,6 +24,7 @@ export interface LarkRuntimeEnv {
   LARK_APP_SECRET?: string;
   LARK_DOMAIN?: string;
   CCTB_LARK_STATE_DIR?: string;
+  CCTB_LARK_ALLOW_ANY_FILE_PATH?: string;
   LARK_REQUIRE_MENTION_IN_GROUP?: string;
   // Long-audio cloud ASR (Aliyun Tingwu). Whitelisted bridge config — these are
   // read from lark.env through loadLarkRuntimeEnv, NOT through the extras

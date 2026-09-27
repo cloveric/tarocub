@@ -552,6 +552,33 @@ describe("bridge runtime config keys (whitelisted, not extras)", () => {
     expect(target.ASR_MAX_AUDIO_SECONDS).toBe("180");
   });
 
+  it("reads the any-file delivery opt-in from lark.env and preserves it across regeneration", async () => {
+    const home = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-any-file-env-"));
+    const stateDir = path.join(home, ".cctb", "fileinst");
+    await mkdir(stateDir, { recursive: true });
+    const envPath = path.join(stateDir, "lark.env");
+    await writeFile(envPath, [
+      "LARK_APP_ID=cli_x",
+      "LARK_APP_SECRET=sek",
+      "CCTB_LARK_ALLOW_ANY_FILE_PATH=1",
+      "",
+    ].join("\n"), "utf8");
+
+    try {
+      const loaded = await loadLarkRuntimeEnv({ HOME: home, CCTB_LARK_INSTANCE: "fileinst" });
+      expect(loaded.CCTB_LARK_ALLOW_ANY_FILE_PATH).toBe("1");
+
+      const target: NodeJS.ProcessEnv = {};
+      expect(applyLarkBridgeRuntimeEnv(loaded, target)).toContain("CCTB_LARK_ALLOW_ANY_FILE_PATH");
+      expect(target.CCTB_LARK_ALLOW_ANY_FILE_PATH).toBe("1");
+
+      await writeLarkEnvFile({ HOME: home, CCTB_LARK_INSTANCE: "fileinst" }, { appId: "cli_x", appSecret: "sek" });
+      expect(await readFile(envPath, "utf8")).toContain('CCTB_LARK_ALLOW_ANY_FILE_PATH="1"');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it("reads TINGWU_ASR_DIR and ASR_CLOUD_* from lark.env and preserves them across regeneration", async () => {
     const home = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-env-"));
     const stateDir = path.join(home, ".cctb", "asrinst");

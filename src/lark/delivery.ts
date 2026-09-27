@@ -1468,7 +1468,7 @@ function renderLarkFileDeliveryError(
   if (locale === "en") {
     switch (reason) {
       case "outside-workspace":
-        return `This file is outside the allowed send directory — a path restriction, not a send failure. Copy it into ${dir} and resend (only files under that directory can be sent), or set CCTB_LARK_ALLOW_ANY_FILE_PATH=1 on this instance to allow any path.`;
+        return `This file is outside the allowed send directory — a path restriction, not a send failure. Copy it into ${dir} and resend (only files under that directory can be sent), or add CCTB_LARK_ALLOW_ANY_FILE_PATH=1 to this instance's lark.env and restart it to allow any readable path.`;
       case "credentials-file":
         return `Refusing to send a credentials-style file${name ? ` (${name})` : ""}. Dotenv files and private keys (.env*, *.pem, *.key, id_rsa, id_ed25519) are never sendable — not even from inside the workspace, and not with CCTB_LARK_ALLOW_ANY_FILE_PATH=1. Copy only the specific non-secret values you need into a normal file.`;
       case "not-found":
@@ -1489,7 +1489,7 @@ function renderLarkFileDeliveryError(
   }
   switch (reason) {
     case "outside-workspace":
-      return `该文件不在允许发送的目录内——这是路径限制，不是发送失败。请把文件复制到 ${dir} 再发（只有该目录下的文件可直接发送），或在该实例设置 CCTB_LARK_ALLOW_ANY_FILE_PATH=1 放开任意路径。`;
+      return `该文件不在允许发送的目录内——这是路径限制，不是发送失败。请把文件复制到 ${dir} 再发（只有该目录下的文件可直接发送），或在该实例的 lark.env 中加入 CCTB_LARK_ALLOW_ANY_FILE_PATH=1 并重启，以放开任意可读路径。`;
     case "credentials-file":
       return `拒绝发送凭据类文件${name ? `（${name}）` : ""}：.env* / *.pem / *.key / id_rsa / id_ed25519 这类文件永远不会被发送——即使它在工作区内，也不受 CCTB_LARK_ALLOW_ANY_FILE_PATH=1 影响。如确需分享，请只把不涉密的内容单独写入普通文件。`;
     case "not-found":
