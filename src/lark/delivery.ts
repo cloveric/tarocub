@@ -37,6 +37,7 @@ import {
 } from "./delivery-preflight.js";
 import { parseLarkDocumentCreateInput } from "./document-client.js";
 import { renderLarkUserFacingError } from "./errors.js";
+import { uploadLarkImageKey } from "./image-upload.js";
 import { resolveLarkLocale } from "./locale.js";
 import { sendManagedCard, type ManagedCardHandle } from "./managed-card.js";
 import { maybeSendLarkScopeAuthCard } from "./scope-auth.js";
@@ -45,6 +46,7 @@ import { stableLarkNumericId } from "./message-normalizer.js";
 import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkChannelLike, LarkSendOptions } from "./types.js";
+import { sendLarkVideoWithCover } from "./video-delivery.js";
 
 // Feishu's upload endpoint rejects files around 26 MiB in practice (HTTP 400,
 // code 9499), despite the public documentation advertising a 30 MB limit.
@@ -464,12 +466,14 @@ export async function deliverLarkResponse(input: {
         const body = await readFile(real);
         try {
           if (deliveryKind === "video") {
-            await input.channel.send(input.chatId, {
-              video: {
-                source: body,
-                fileName: path.basename(real),
-              },
-            }, replyOptions);
+            await sendLarkVideoWithCover({
+              channel: input.channel,
+              chatId: input.chatId,
+              videoPath: real,
+              body,
+              fileName: path.basename(real),
+              options: replyOptions,
+            });
           } else {
             await input.channel.send(input.chatId, {
               file: {
@@ -1079,12 +1083,14 @@ async function sendLarkPath(input: {
   }
   if (deliveryKind === "video") {
     try {
-      await input.channel.send(input.chatId, {
-        video: {
-          source: body,
-          fileName: path.basename(real),
-        },
-      }, larkReplyOptions(input.replyTo, input.replyInThread));
+      await sendLarkVideoWithCover({
+        channel: input.channel,
+        chatId: input.chatId,
+        videoPath: real,
+        body,
+        fileName: path.basename(real),
+        options: larkReplyOptions(input.replyTo, input.replyInThread),
+      });
     } catch (error) {
       return reportUploadFailure(error);
     }
@@ -1140,37 +1146,6 @@ export function captionForLarkImage(text: string, tagIndex: number): string | un
   }
   // Drop a leading markdown heading marker so it renders at normal body size.
   return line.replace(/^#{1,6}\s+/, "").trim() || undefined;
-}
-
-/**
- * Deliver one image as a single card: caption (if any) + the image, so a batch of
- * titled images stays legible. Returns false (caller falls back to a bare image
- * message) when the channel can't upload or the upload yields no key.
- */
-interface LarkRawImageClient {
-  im?: {
-    v1?: {
-      image?: {
-        create?: (req: { data: { image_type: string; image: Buffer } }) =>
-          Promise<{ image_key?: string; data?: { image_key?: string } }>;
-      };
-    };
-  };
-}
-
-/**
- * Uploads an image via the SDK channel's raw client and returns its image_key.
- * The SDK channel does NOT expose a standalone uploadImage; `rawClient.im.v1.image.create`
- * is the supported path (verified against real Feishu). Returns undefined when the
- * raw client / method isn't available so the caller falls back to a bare image.
- */
-async function uploadLarkImageKey(channel: LarkChannelLike, body: Buffer): Promise<string | undefined> {
-  const image = (channel as { rawClient?: LarkRawImageClient }).rawClient?.im?.v1?.image;
-  if (!image || typeof image.create !== "function") {
-    return undefined;
-  }
-  const res = await image.create({ data: { image_type: "message", image: body } });
-  return res?.image_key ?? res?.data?.image_key ?? undefined;
 }
 
 /**
