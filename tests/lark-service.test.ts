@@ -2217,7 +2217,7 @@ describe("lark service", () => {
     }
   });
 
-  it("names the file and the 30MB cap when a [send-file:] target exceeds Feishu's upload limit", async () => {
+  it("names the file and the tested-safe 26MB cap when a [send-file:] target exceeds Feishu's upload limit", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-file-too-large-"));
     const bigPath = path.join(stateDir, "workspace", "books_bundle.zip");
     await mkdir(path.dirname(bigPath), { recursive: true });
@@ -2240,15 +2240,12 @@ describe("lark service", () => {
       const calls = channel.send.mock.calls as unknown[][];
       // Rejected up front — no upload attempt at all.
       expect(calls.some((call) => Boolean((call[1] as { file?: unknown }).file))).toBe(false);
-      const texts = calls
-        .map((call) => call[1] as { text?: string })
-        .map((payload) => payload.text)
-        .filter((text): text is string => typeof text === "string");
-      const notice = texts.find((text) => text.includes("books_bundle.zip"));
-      expect(notice).toBeDefined();
-      expect(notice).toContain("31MB");
-      expect(notice).toContain("30MB");
-      expect(notice).not.toContain("读取文件失败");
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expectLarkFinalAnswer(channel, "books_bundle.zip");
+      expectLarkFinalAnswer(channel, "31MB");
+      expectLarkFinalAnswer(channel, "26MB");
+      const rendered = JSON.stringify(channel.send.mock.calls) + JSON.stringify(channel.updateCard.mock.calls);
+      expect(rendered).not.toContain("读取文件失败");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
@@ -11031,6 +11028,70 @@ describe("lark service", () => {
     }
   });
 
+  it("repairs an oversized video before attempting the Lark upload", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-oversize-repair-"));
+    const workspace = path.join(stateDir, "workspace");
+    const oversizedPath = path.join(workspace, "full-video.mp4");
+    const compressedPath = path.join(workspace, "full-video-compressed.mp4");
+    await mkdir(workspace, { recursive: true });
+    await writeFile(oversizedPath, "");
+    await truncate(oversizedPath, LARK_FILE_UPLOAD_MAX_BYTES + 1);
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn()
+        .mockResolvedValueOnce({
+          text: `视频已生成。\n[send-file:${oversizedPath}]`,
+        })
+        .mockImplementationOnce(async (input: Parameters<LarkBridgeLike["handleAuthorizedMessage"]>[0]) => {
+          expect(input.text).toContain("Delivery preflight retry");
+          expect(input.text).toContain(oversizedPath);
+          expect(input.text).toContain("too-large");
+          expect(input.text).toContain("26 MiB");
+          expect(input.text).toContain("compressed replacement or split parts");
+          await writeFile(compressedPath, "compressed video body");
+          return { text: `[send-file:${compressedPath}]` };
+        }),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_repair_oversized_video",
+          content: "把视频发给我",
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(2);
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { video: { source: Buffer.from("compressed video body"), fileName: "full-video-compressed.mp4" } },
+        { replyTo: "om_repair_oversized_video" },
+      );
+      expect((channel.send.mock.calls as unknown[][]).some((call) => {
+        return Boolean((call[1] as { file?: unknown }).file);
+      })).toBe(false);
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.rejected",
+        outcome: "rejected",
+        metadata: expect.objectContaining({
+          path: oversizedPath,
+          reason: "too-large",
+        }),
+      }));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "turn.completed",
+        outcome: "success",
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("still delivers verified siblings when a delivery repair round fails", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-delivery-partial-repair-"));
     const workspace = path.join(stateDir, "workspace");
@@ -12481,7 +12542,7 @@ describe("lark service", () => {
       })).toBe(false);
       expect((channel.send.mock.calls as unknown[][]).some((call) => {
         const payload = call[1] as { text?: string } | undefined;
-        return payload?.text?.includes("30MB") === true;
+        return payload?.text?.includes("26MB") === true;
       })).toBe(true);
       const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
       expect(timeline).toContainEqual(expect.objectContaining({

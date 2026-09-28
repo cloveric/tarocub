@@ -272,11 +272,11 @@ describe("Lark delivery follow-up guard", () => {
     }
   });
 
-  it("rejects a path above the sender's 30MB upload cap", async () => {
+  it("rejects a path above the sender's tested-safe 26MB upload cap", async () => {
     const ws = realpathSync(mkdtempSync(path.join(os.tmpdir(), "cctb-followup-oversize-")));
     const huge = path.join(ws, "huge.bin");
     writeFileSync(huge, "");
-    truncateSync(huge, 31 * 1024 * 1024);
+    truncateSync(huge, 27 * 1024 * 1024);
     try {
       expect(await shouldRepairLarkDeliveryFollowup(
         "我没有收到文件",

@@ -16,7 +16,11 @@ export type LarkFileRejectReason =
   | "upload-failed"
   | "delivery-uncertain";
 
-export const LARK_FILE_UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
+// Feishu documents a 30 MB bot-file limit, but the upload endpoint used by the
+// SDK rejects payloads once the file itself crosses roughly 26 MiB. Keep the
+// preflight boundary at the verified limit so the agent can repair the output
+// before the user sees an opaque HTTP 400 / code 9499 failure.
+export const LARK_FILE_UPLOAD_MAX_BYTES = 26 * 1024 * 1024;
 export const LARK_BATCH_UPLOAD_MAX_BYTES = 120 * 1024 * 1024;
 
 export interface LarkDeliveryPreflightInput {

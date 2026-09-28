@@ -2398,7 +2398,9 @@ async function runNormalizedLarkMessage(
         );
         const deliveryIssues = initialDeliveryDirectivePreflight.issues;
         const hasRepairableDeliveryIssue = deliveryIssues.some(
-          (issue) => issue.reason === "outside-workspace" || issue.reason === "invalid-directive",
+          (issue) => issue.reason === "outside-workspace"
+            || issue.reason === "invalid-directive"
+            || issue.reason === "too-large",
         );
         // Repair rejected artifacts before sending any sibling. The bridge
         // preserves the first answer, actions, and verified files while the

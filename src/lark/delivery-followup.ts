@@ -14,6 +14,7 @@ import {
 import {
   extractWholeResponseFileBlock,
   isLarkSendToolName,
+  LARK_FILE_UPLOAD_MAX_BYTES,
   normalizeLarkSendTool,
   preflightLarkDeliveryPath,
   preflightLarkInlineFile,
@@ -33,6 +34,7 @@ export interface LarkDeliveryDirectiveIssue {
   caption?: string;
   reason: Exclude<LarkFileRejectReason, "upload-failed"> | "invalid-directive";
   realPath?: string;
+  fileBytes?: number;
   workspaceRoot?: string;
 }
 
@@ -121,6 +123,7 @@ export async function preflightLarkResponseDeliveryDirectives(
             path: wholeFileBlock.fileName,
             kind: "file",
             reason: inlinePreflight.reason,
+            fileBytes: inlinePreflight.fileBytes,
           }],
     };
   }
@@ -201,6 +204,7 @@ export async function preflightLarkResponseDeliveryDirectives(
         ...(artifact.caption ? { caption: artifact.caption } : {}),
         reason: checked.reason,
         ...(checked.realPath ? { realPath: checked.realPath } : {}),
+        ...(checked.fileBytes !== undefined ? { fileBytes: checked.fileBytes } : {}),
         ...(checked.workspaceRoot ? { workspaceRoot: checked.workspaceRoot } : {}),
       });
       continue;
@@ -375,14 +379,24 @@ export function larkDeliveryPreflightRepairPrompt(
 ): string {
   const issues = preflight.issues.slice(0, 20);
   const workspaceRoot = issues.find((issue) => issue.workspaceRoot)?.workspaceRoot;
+  const uploadLimitMiB = Math.floor(LARK_FILE_UPLOAD_MAX_BYTES / (1024 * 1024));
   const rejected = issues
-    .map((issue) => `- ${JSON.stringify(issue.path)} (${issue.reason})`)
+    .map((issue) => {
+      const size = issue.fileBytes === undefined
+        ? ""
+        : `, ${Math.ceil(issue.fileBytes / (1024 * 1024))} MiB`;
+      return `- ${JSON.stringify(issue.path)} (${issue.reason}${size})`;
+    })
     .join("\n");
+  const hasOversizeArtifact = issues.some((issue) => issue.reason === "too-large");
   return [
     "Delivery preflight retry: your previous response referenced artifact paths that cannot be delivered.",
     rejected ? `Rejected artifacts:\n${rejected}` : "No executable artifact directive was found.",
     workspaceRoot ? `Allowed workspace: ${JSON.stringify(workspaceRoot)}` : undefined,
-    "Repair ONLY the rejected artifacts: copy each non-secret existing artifact into the allowed workspace, verify it exists and is non-empty, then return only the corrected [send-image:/absolute/path], [send-file:/absolute/path], or send.* tags.",
+    hasOversizeArtifact
+      ? `Oversize repair: create a compressed replacement or split parts, each no larger than ${uploadLimitMiB} MiB. Preserve the complete content; for media, prefer reducing bitrate before changing duration. Verify every replacement exists, is non-empty, is within the limit, and remains readable/playable.`
+      : undefined,
+    "Repair ONLY the rejected artifacts: resolve the stated reason, then return only the corrected [send-image:/absolute/path], [send-file:/absolute/path], or send.* tags.",
     "Do not repeat the previous prose, valid sibling artifacts, or non-delivery tool actions; the bridge preserves them. Never copy credentials or secret files. If an artifact cannot be repaired safely, state that exact failure instead of claiming it was sent.",
   ].filter((line): line is string => Boolean(line)).join("\n");
 }
@@ -406,6 +420,15 @@ export function renderLarkDeliveryPreflightFailure(
     return locale === "zh"
       ? `交付失败：${fileName} 仍不在允许发送的目录内，自动修复没有成功。${workspace}`
       : `Delivery failed: ${fileName} is still outside the allowed workspace and automatic repair did not succeed. ${workspace}`.trim();
+  }
+  if (issue.reason === "too-large") {
+    const uploadLimitMiB = Math.floor(LARK_FILE_UPLOAD_MAX_BYTES / (1024 * 1024));
+    const fileSizeMiB = issue.fileBytes === undefined
+      ? undefined
+      : Math.ceil(issue.fileBytes / (1024 * 1024));
+    return locale === "zh"
+      ? `交付失败：${fileName}${fileSizeMiB === undefined ? "" : ` 有 ${fileSizeMiB}MB，`}仍超过当前接口实测安全上限 ${uploadLimitMiB}MB，自动压缩或拆分没有成功。`
+      : `Delivery failed: ${fileName}${fileSizeMiB === undefined ? "" : ` is ${fileSizeMiB}MB and`} is still above the current tested-safe ${uploadLimitMiB}MB upload limit; automatic compression or splitting did not succeed.`;
   }
   return locale === "zh"
     ? `交付失败：${fileName} 仍未通过发送前检查（${issue.reason}），自动修复没有成功。`

@@ -46,9 +46,10 @@ import { redactLarkErrorDetail } from "./redaction.js";
 import type { LarkServiceRuntime } from "./runtime.js";
 import type { LarkChannelLike, LarkSendOptions } from "./types.js";
 
-// Feishu rejects bot file uploads above ~30MB (HTTP 400 with no useful message).
+// Feishu's upload endpoint rejects files around 26 MiB in practice (HTTP 400,
+// code 9499), despite the public documentation advertising a 30 MB limit.
 // Checked up front so an oversize file gets a precise "split it" notice instead
-// of a generic upload failure — the 31MB-archive case that confused the operator.
+// of a generic upload failure.
 export { LARK_FILE_UPLOAD_MAX_BYTES } from "./delivery-preflight.js";
 const LARK_MARKDOWN_CHUNK_LIMIT = 3500;
 
@@ -1496,7 +1497,7 @@ function renderLarkFileDeliveryError(
       case "permission-denied":
         return `File was not sent: no permission to read it${name ? ` (${name})` : ""}.`;
       case "too-large":
-        return `File was not sent: ${name ?? "the file"} is ${sizeMb ?? "?"}MB, over Feishu's ${capMb}MB bot upload limit. Split it into smaller parts or compress it further, then resend.`;
+        return `File was not sent: ${name ?? "the file"} is ${sizeMb ?? "?"}MB, over the current tested-safe ${capMb}MB Feishu bot upload limit. Split it into smaller parts or compress it further, then resend.`;
       case "batch-too-large":
         return `Files were not sent: the batch is ${sizeMb ?? "?"}MB, over the ${batchCapMb}MB aggregate limit. Split it into smaller batches and resend.`;
       case "upload-failed":
@@ -1517,7 +1518,7 @@ function renderLarkFileDeliveryError(
     case "permission-denied":
       return `文件未发送：没有读取权限${name ? `（${name}）` : ""}。`;
     case "too-large":
-      return `文件未发送：${name ?? "该文件"} 有 ${sizeMb ?? "?"}MB，超过飞书机器人 ${capMb}MB 上传上限。请拆分成多个小包或进一步压缩后重发。`;
+      return `文件未发送：${name ?? "该文件"} 有 ${sizeMb ?? "?"}MB，超过当前接口实测安全上限 ${capMb}MB。请拆分成多个小包或进一步压缩后重发。`;
     case "batch-too-large":
       return `文件未发送：本批次合计 ${sizeMb ?? "?"}MB，超过 ${batchCapMb}MB 总量上限。请拆成多个批次后重发。`;
     case "upload-failed":
