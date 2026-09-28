@@ -432,6 +432,7 @@ export async function deliverLarkResponse(input: {
     const pendingImages: Array<{ path: string; caption?: string }> = [];
     for (const match of deliveryMatches) {
       const filePath = match.path;
+      const deliveryKind = effectiveLarkSendPathKind(match.preferPhoto ? "image" : "file", filePath);
       const pathPreflight = await preflightLarkDeliveryPath(filePath, deliveryRoots);
       if (!pathPreflight.ok) {
         ok = false;
@@ -440,7 +441,7 @@ export async function deliverLarkResponse(input: {
           ...(pathPreflight.realPath ? { realPath: pathPreflight.realPath } : {}),
           reason: pathPreflight.reason,
           ...(pathPreflight.detail ? { detail: pathPreflight.detail } : {}),
-          kind: match.preferPhoto ? "image" : "file",
+          kind: deliveryKind,
         });
         await sendDeliveryErrorOnce(renderLarkFileDeliveryError(pathPreflight.reason, locale, {
           workspaceRoot: pathPreflight.workspaceRoot,
@@ -461,12 +462,21 @@ export async function deliverLarkResponse(input: {
       try {
         const body = await readFile(real);
         try {
-          await input.channel.send(input.chatId, {
-            file: {
-              source: body,
-              fileName: path.basename(real),
-            },
-          }, replyOptions);
+          if (deliveryKind === "video") {
+            await input.channel.send(input.chatId, {
+              video: {
+                source: body,
+                fileName: path.basename(real),
+              },
+            }, replyOptions);
+          } else {
+            await input.channel.send(input.chatId, {
+              file: {
+                source: body,
+                fileName: path.basename(real),
+              },
+            }, replyOptions);
+          }
         } catch (error) {
           ok = false;
           // The file was read fine — Feishu rejected the upload. Say so instead
@@ -476,7 +486,7 @@ export async function deliverLarkResponse(input: {
             realPath: real,
             reason: "upload-failed",
             detail: errorDetail(error),
-            kind: "file",
+            kind: deliveryKind,
           });
           await input.channel.send(input.chatId, {
             text: renderLarkFileDeliveryError("upload-failed", locale, { fileName: path.basename(real) }),
@@ -486,7 +496,7 @@ export async function deliverLarkResponse(input: {
         await appendLarkFileAcceptedTimeline(input, {
           fileName: path.basename(real),
           bytes: body.length,
-          kind: "file",
+          kind: deliveryKind,
         });
       } catch (error) {
         ok = false;
@@ -495,7 +505,7 @@ export async function deliverLarkResponse(input: {
           path: filePath,
           reason,
           detail: redactLarkErrorDetail(error),
-          kind: "file",
+          kind: deliveryKind,
         });
         await input.channel.send(input.chatId, {
           text: renderLarkFileDeliveryError(reason, locale, { fileName: path.basename(filePath) }),
@@ -933,6 +943,12 @@ function renderInvalidLarkToolPayload(
   return `错误：飞书工具参数无效：${toolName} ${field ?? "字段"} 必须是字符串数组。`;
 }
 
+function effectiveLarkSendPathKind(kind: LarkSendPathKind, filePath: string): LarkSendPathKind {
+  return kind === "file" && path.extname(filePath).toLowerCase() === ".mp4"
+    ? "video"
+    : kind;
+}
+
 async function sendLarkPath(input: {
   channel: LarkChannelLike;
   chatId: string;
@@ -953,6 +969,10 @@ async function sendLarkPath(input: {
   /** Optional artifact title. Images keep it in-card; other media sends it as markdown. */
   caption?: string;
 }): Promise<boolean> {
+  // Feishu requires MP4 uploads to use file_type=mp4 (the SDK's video path).
+  // Models still occasionally emit send.file/[send-file:] for videos, so repair
+  // that unambiguous mismatch at the final delivery boundary.
+  const deliveryKind = effectiveLarkSendPathKind(input.kind, input.filePath);
   const deliveryRoots = await resolveLarkDeliveryRoots(input);
   const pathPreflight = await preflightLarkDeliveryPath(input.filePath, deliveryRoots);
   if (!pathPreflight.ok) {
@@ -961,7 +981,7 @@ async function sendLarkPath(input: {
       ...(pathPreflight.realPath ? { realPath: pathPreflight.realPath } : {}),
       reason: pathPreflight.reason,
       ...(pathPreflight.detail ? { detail: pathPreflight.detail } : {}),
-      kind: input.kind,
+      kind: deliveryKind,
     });
     await input.channel.send(input.chatId, {
       text: renderLarkFileDeliveryError(pathPreflight.reason, input.locale, {
@@ -983,14 +1003,14 @@ async function sendLarkPath(input: {
       realPath: real,
       reason,
       detail: errorDetail(error),
-      kind: input.kind,
+      kind: deliveryKind,
     });
     await input.channel.send(input.chatId, {
       text: renderLarkFileDeliveryError(reason, input.locale, { fileName: path.basename(real) }),
     }, larkReplyOptions(input.replyTo, input.replyInThread));
     return false;
   }
-  if (input.kind === "image") {
+  if (deliveryKind === "image") {
     // A captioned image (e.g. a titled send.batch entry, or send.image with a
     // caption) is delivered as a single card pairing the title with the image,
     // so a 小红书 P1/P2/… series stays legible. A failed image-key upload can
@@ -1031,14 +1051,14 @@ async function sendLarkPath(input: {
       realPath: real,
       reason: "upload-failed",
       detail: errorDetail(error),
-      kind: input.kind,
+      kind: deliveryKind,
     });
     await input.channel.send(input.chatId, {
       text: renderLarkFileDeliveryError("upload-failed", input.locale, { fileName: path.basename(real) }),
     }, larkReplyOptions(input.replyTo, input.replyInThread));
     return false;
   };
-  if (input.kind === "audio") {
+  if (deliveryKind === "audio") {
     try {
       await input.channel.send(input.chatId, {
         audio: {
@@ -1052,11 +1072,11 @@ async function sendLarkPath(input: {
     await appendLarkFileAcceptedTimeline(input, {
       fileName: path.basename(real),
       bytes: body.length,
-      kind: input.kind,
+      kind: deliveryKind,
     });
     return true;
   }
-  if (input.kind === "video") {
+  if (deliveryKind === "video") {
     try {
       await input.channel.send(input.chatId, {
         video: {
@@ -1070,7 +1090,7 @@ async function sendLarkPath(input: {
     await appendLarkFileAcceptedTimeline(input, {
       fileName: path.basename(real),
       bytes: body.length,
-      kind: input.kind,
+      kind: deliveryKind,
     });
     return true;
   }
@@ -1087,7 +1107,7 @@ async function sendLarkPath(input: {
   await appendLarkFileAcceptedTimeline(input, {
     fileName: path.basename(real),
     bytes: body.length,
-    kind: input.kind,
+    kind: deliveryKind,
   });
   return true;
 }

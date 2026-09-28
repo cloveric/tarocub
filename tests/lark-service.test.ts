@@ -12373,6 +12373,49 @@ describe("lark service", () => {
     }
   });
 
+  it("repairs an MP4 sent through the generic file tag into a Lark video upload", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-mp4-file-tag-"));
+    const outputDir = path.join(stateDir, "workspace", "out");
+    const videoPath = path.join(outputDir, "generated-video.MP4");
+    await mkdir(outputDir, { recursive: true });
+    await writeFile(videoPath, "video body");
+    const channel = fakeChannel();
+    const bridge = {
+      handleAuthorizedMessage: vi.fn(async () => ({
+        text: `Video ready.\n[send-file:${videoPath}]`,
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime(),
+        stateDir,
+        message: fakeLarkMessage({ messageId: "om_mp4_file_tag", content: "send the video" }),
+      });
+
+      expect(channel.send).toHaveBeenCalledWith(
+        "oc_chat",
+        { video: { source: Buffer.from("video body"), fileName: "generated-video.MP4" } },
+        { replyTo: "om_mp4_file_tag" },
+      );
+      expect((channel.send.mock.calls as unknown[][]).some((call) => {
+        return Boolean((call[1] as { file?: unknown }).file);
+      })).toBe(false);
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.accepted",
+        metadata: expect.objectContaining({
+          fileName: "generated-video.MP4",
+          kind: "video",
+        }),
+      }));
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("delivers whole-response file fenced blocks as Lark files", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-fenced-file-"));
     const channel = fakeChannel();
