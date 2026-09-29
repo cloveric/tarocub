@@ -87,8 +87,16 @@ import {
   shouldRepairLarkDeliveryFollowup,
 } from "./delivery-followup.js";
 import { isReplaySafeLarkToolName, shouldRetryLarkStaleResponse } from "./stale-response-guard.js";
-import { hasTranscribableMediaExtension } from "../runtime/media-extensions.js";
+import {
+  hasTranscribableMediaExtension,
+  hasTranscribableVideoExtension,
+} from "../runtime/media-extensions.js";
 import { formatBridgeMediaTranscript } from "../runtime/media-transcript.js";
+import {
+  formatPreparedVideoInput,
+  prepareVideoInput,
+  type PreparedVideoInput,
+} from "../runtime/video-input.js";
 import {
   deliveryLedgerEnabled,
   markDeliveryAttempting,
@@ -104,7 +112,7 @@ import {
   renderLarkBackgroundTaskHeader,
   renderLarkChatAccessDenied,
   renderLarkConversationQueueWait,
-  renderLarkMediaTranscriptionFailure,
+  renderLarkAudioTranscriptionFailure,
   renderLarkQueuedTaskSkipped,
   renderLarkStopResult,
   renderLarkTurnPoolWait,
@@ -139,6 +147,7 @@ import type { Locale } from "../telegram/message-renderer.js";
 import { appendLarkTimelineEvent } from "./timeline.js";
 
 const defaultTranscribeLarkMedia = createDefaultTranscribeVoice();
+const defaultPrepareLarkVideoInput = prepareVideoInput;
 
 type LarkTurnUsage = Awaited<ReturnType<LarkBridgeLike["handleAuthorizedMessage"]>>["usage"];
 
@@ -1690,9 +1699,38 @@ async function runNormalizedLarkMessage(
       });
       const mediaDownloads = downloadedAttachments.filter(isTranscribableLarkMedia);
       const workflowDownloads = downloadedAttachments.filter((attachment) => !isTranscribableLarkMedia(attachment));
+      const engineVideoPaths: string[] = [];
       if (mediaDownloads.length > 0) {
         const transcribeMedia = input.runtime.transcribeMedia ?? defaultTranscribeLarkMedia;
+        const prepareLarkVideoInput = input.runtime.prepareVideoInput ?? defaultPrepareLarkVideoInput;
         for (const media of mediaDownloads) {
+          const isVideo = isVideoLarkMedia(media);
+          if (isVideo) {
+            let prepared: PreparedVideoInput;
+            try {
+              prepared = await prepareLarkVideoInput(media.localPath, {
+                abortSignal: runController.signal,
+              });
+            } catch (error) {
+              if (runController.signal.aborted) {
+                throw error;
+              }
+              prepared = { durationSeconds: null, framePaths: [], mode: "direct" };
+            }
+            engineVideoPaths.push(...prepared.framePaths, media.localPath);
+            const fileName = media.attachment.fileName ?? path.basename(media.localPath);
+            const preparationBlock = formatPreparedVideoInput(fileName, prepared);
+            requestText = requestText.trim()
+              ? `${requestText.trim()}\n${preparationBlock}`
+              : preparationBlock;
+
+            // Long/unprobeable clips are handed directly to the agent. It can
+            // choose its own inspection strategy instead of paying for an
+            // automatic full-audio transcription the user did not request.
+            if (prepared.mode === "direct") {
+              continue;
+            }
+          }
           try {
             // Message text enables the 强制云端转写/强制本地转写 routing
             // overrides; stateDir hosts cloud ASR job dirs (`asr-jobs/`).
@@ -1723,6 +1761,23 @@ async function runNormalizedLarkMessage(
             if (isCloudAsrCancelledError(error) || runController.signal.aborted) {
               throw error;
             }
+            // A video always has a usable fallback: extracted frames for a
+            // short clip, or the original local path for a long/unprobeable
+            // one. Silent clips and ASR outages must not prevent the model from
+            // seeing the visual content.
+            if (isVideo) {
+              await appendLarkTimelineEvent(input.stateDir, normalized, {
+                type: "file.accepted",
+                outcome: "accepted",
+                detail: "video audio transcription failed; visual input passed through",
+                metadata: {
+                  fileName: media.attachment.fileName,
+                  kind: media.attachment.kind,
+                  phase: "prepare",
+                },
+              });
+              continue;
+            }
             // A PROMOTED file (a recording sent as a document) still has the
             // file itself to work with, so a failed transcription must NOT end
             // the turn with "转写失败" — before this promotion existed the file
@@ -1748,7 +1803,7 @@ async function runNormalizedLarkMessage(
               continue;
             }
             await input.channel.send(normalized.chatId, {
-              text: renderLarkMediaTranscriptionFailure(locale),
+              text: renderLarkAudioTranscriptionFailure(locale),
             }, {
               replyTo: normalized.messageId,
               replyInThread: Boolean(normalized.threadId),
@@ -1766,15 +1821,18 @@ async function runNormalizedLarkMessage(
           }
         }
       }
-      // A PROMOTED media file (an .m4a sent as a document, not as a Feishu voice
-      // message) is transcribed above, but it is still a file the user handed
-      // over — keep its path so the engine can also act on the file itself
-      // (convert it, upload it, attach it). Genuine audio/video MESSAGES keep
-      // their long-standing transcript-only behavior.
+      // A PROMOTED audio file (an .m4a sent as a document, not as a Feishu
+      // voice message) is transcribed above, but it is still a file the user
+      // handed over. Videos are handled separately: every engine gets the
+      // original path, plus sampled frames when the clip is short enough.
       const promotedMediaPaths = mediaDownloads
-        .filter((downloaded) => downloaded.attachment.kind === "file")
+        .filter((downloaded) => downloaded.attachment.kind === "file" && !isVideoLarkMedia(downloaded))
         .map((downloaded) => downloaded.localPath);
-      files = [...workflowDownloads.map((attachment) => attachment.localPath), ...promotedMediaPaths];
+      files = [...new Set([
+        ...workflowDownloads.map((attachment) => attachment.localPath),
+        ...promotedMediaPaths,
+        ...engineVideoPaths,
+      ])];
       const workflowResult = await prepareLarkFileWorkflow({
         stateDir: input.stateDir,
         normalized: { ...normalized, text: requestText },
@@ -3757,4 +3815,14 @@ function isTranscribableLarkMedia(downloaded: DownloadedLarkAttachment): boolean
     return false;
   }
   return hasTranscribableMediaExtension(downloaded.attachment.fileName ?? downloaded.localPath);
+}
+
+function isVideoLarkMedia(downloaded: DownloadedLarkAttachment): boolean {
+  if (downloaded.attachment.kind === "video") {
+    return true;
+  }
+  if (downloaded.attachment.kind !== "file") {
+    return false;
+  }
+  return hasTranscribableVideoExtension(downloaded.attachment.fileName ?? downloaded.localPath);
 }

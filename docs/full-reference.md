@@ -121,7 +121,7 @@ The Lark channel currently supports:
 - `/ws list`, `/ws save <name> [absolute-path]`, `/ws use <name>`, and `/ws remove <name>` manage saved Lark workspace directories. `/ws use` resets the current conversation binding so a workspace switch does not silently continue with stale project context;
 - ordinary tasks return the final answer directly; interactive cards are reserved for stop controls, approvals, `lark.choice` / card choices, and archive continuation;
 - approval cards for engine permission requests, with callback operators checked against bridge access policy before resolving;
-- inbound image/file resources downloaded into the bridge workspace for the current turn, then cleaned up after staging/transcription; inbound Lark audio/video resources use the same ASR router as Telegram before engine execution (short media via local Qwen, long media via Tingwu when configured);
+- inbound image/file resources downloaded into the bridge workspace for the current turn, then cleaned up after staging/transcription; inbound Lark voice/audio uses the shared Qwen/Tingwu ASR router, while video up to 10 seconds supplies one frame per second (up to 10), the original path, and best-effort audio text; longer or unprobeable video supplies only the original path for agent-directed inspection;
 - outbound `[send-file:/abs/path]`, `[send-image:/abs/path]`, `send.audio`, `send.video`, `send.batch`, and whole-response fenced `file:name.ext` blocks delivered back to Lark;
 - rich Feishu posts through `lark.post` tool tags when plain Markdown is too limiting;
 - bridge-managed user choice cards through `lark.choice`, plus custom interactive cards through `lark.card`; button clicks are access-checked, audited, and fed back into the same bridge session;
@@ -147,7 +147,7 @@ Most bridge-level features now exist on both channels. The remaining differences
 | Group self-service | `/group allow`, `/group all`, `/group at` | Same commands; `/group all` also needs the app scopes `im:message` and `im:message.group_msg`; multi-agent @bot groups should also grant `im:message.group_at_msg.include_bot:readonly` |
 | Running feedback | Native `typing...` action | Best-effort message reactions: `OnIt` while processing, `DONE` on success, `ERROR` on uncaught failure; ordinary turns still return final answers directly |
 | Scheduled work | `/cron` and `cron.add` return to the Telegram chat/topic | `/cron` and `cron.add` preserve raw Lark chat/thread routing |
-| Files and media | Files/images/voice/audio/video, including media documents detected from their downloaded path when `file_name` is absent; subject to Telegram Bot API limits | Files/images/audio/video, including recordings forwarded as ordinary files, through Lark resources and the shared Qwen/Tingwu ASR router |
+| Files and media | Files/images/voice/audio/video, including media documents detected from their downloaded path when `file_name` is absent; subject to Telegram Bot API limits | Files/images/audio/video, including recordings forwarded as ordinary files; audio uses shared Qwen/Tingwu ASR, while video uses short-clip frames or the original path |
 | Interactive workflows | Inline buttons for stop, approvals, and continue-analysis | Card 2.0 callbacks for stop, approvals, choices, and continue-analysis |
 | Outgoing @mentions | Telegram text mentions | Optional native `@name` resolution with `CCTB_LARK_RESOLVE_MENTIONS=1` and `im:chat.members:read` |
 | Docs comments | Not a Telegram concept | Feishu Docs comment @mentions can run the bridge and reply in-thread |
@@ -213,7 +213,7 @@ Before calling a Lark app production-ready, run these checks against the real ap
 4. Send `/status`, `/help`, `/usage`, `/goal 写发布说明`, `/goal status`, `/stop`, and `/reset`; each should reply in the same chat/thread.
 5. In a disposable Lark test space, send `/newgroup CCTB smoke test` or `/newtopic CCTB smoke test`; the bot should create a new group/topic chat, post a welcome message there, and reply with the new chat id/link.
 6. In a Lark group, confirm the default mention-only behavior, then use `/group all` and `/group at` to switch ordinary-message handling on and off.
-7. Send an image, a file, an audio resource, and a video resource; files should enter the workspace, while audio/video should be transcribed before the engine runs.
+7. Send an image, a file, an audio resource, a video no longer than 10 seconds, and a longer video. Files should enter the workspace; audio should be transcribed; the short video should provide sampled frames plus its original path even when silent; the longer video should reach the engine as its original path without automatic ASR.
 8. Ask the agent to create a reminder and verify the emitted `cron.add` tool tag creates a Lark-routed job; then run or wait for the job and confirm it returns to the same Lark chat/thread.
 9. Trigger a permission request, a `lark.choice` / `lark.card` choice button, and an archive `Continue Analysis` card; every button should callback exactly once and respect Lark access checks.
 10. Create a Feishu Docs comment that @mentions the bot; it should fetch comment context and reply in the comment thread.
@@ -722,9 +722,9 @@ Budget is enforced in real-time — the bot replies with a bilingual message whe
 
 ---
 
-## Voice Input (ASR)
+## Voice, Audio, And Video Input
 
-Send voice/audio/video in Telegram, or audio/video resources through Lark. Recordings forwarded as ordinary Telegram documents or Lark files use the same path; media type is detected from the declared filename and, on Telegram, the downloaded Bot API path when `file_name` is absent. The bridge transcribes them before forwarding text to the selected engine: short media uses the local Qwen ASR, while media at or above the configured threshold (15 minutes by default) uses Aliyun Tongyi Tingwu when enabled. Cloud ASR is optional; without it, all media stays local. If a promoted media file cannot be transcribed or yields no text, the bridge preserves the attachment and adds an explicit fallback note so the engine can inspect or transcribe it.
+Send voice/audio/video in Telegram, or audio/video resources through Lark. Recordings forwarded as ordinary Telegram documents or Lark files are detected from their declared filename and, on Telegram, the downloaded Bot API path when `file_name` is absent. Voice/audio and Telegram video are transcribed before the selected engine runs: short media uses local Qwen ASR, while media at or above the configured threshold (15 minutes by default) uses Aliyun Tongyi Tingwu when enabled. Cloud ASR is optional; without it, automatic transcription stays local. Lark video is visual-first instead: clips up to and including 10 seconds supply one chronological frame per second (up to 10), the original path, and a best-effort audio transcript; longer or unprobeable clips skip automatic ASR/framing and supply the original path directly. Silent clips or ASR failures do not block their visual input. A promoted audio file that cannot be transcribed or yields no text remains attached with an explicit fallback note.
 
 Install TaroCub's bundled Tingwu adapter once per machine with `bash scripts/install-tingwu-asr.sh`; do not implement or copy one adapter per bot. The shared subprocess owns OSS upload and Tingwu task polling, while the bridge owns routing and fallback. See [`integrations/tingwu-asr/README.md`](../integrations/tingwu-asr/README.md). `lark doctor` validates this contract without reading `.env.local`.
 
@@ -732,9 +732,9 @@ Install TaroCub's bundled Tingwu adapter once per machine with `bash scripts/ins
 
 1. User sends a voice/audio/video message, or forwards a recording as a Telegram document/Lark file
 2. The bridge downloads the media and probes its duration
-3. Short media uses local Qwen ASR (HTTP first, CLI fallback); long media uses Tingwu when configured, with safe chunked local fallback on cloud failure
-4. The transcript is appended to the user's text message
-5. Claude, Codex, Kimi, DeepSeek, or Antigravity processes it as a normal text request
+3. Voice/audio and Telegram video use local Qwen ASR when short; long media uses Tingwu when configured, with safe chunked local fallback on cloud failure
+4. Lark video at 10 seconds or less gets up to 10 chronological frames, its original path, and best-effort audio text; longer or unprobeable Lark video gets only its original path
+5. Claude, Codex, Kimi, DeepSeek, or Antigravity receives the user's request plus the prepared transcript, frames, and/or original media path
 
 The route is selected before the engine adapter runs, so it is identical across all five engines. `/stop` propagates through duration probing, ffmpeg chunking, local HTTP/CLI transcription, and the Tingwu child process. An operator cancellation is never treated as a cloud failure and never starts a local fallback. The bridge aborts its local HTTP request promptly; the standalone ASR server may still finish an already-running model kernel before observing the disconnected client.
 
@@ -1490,8 +1490,8 @@ Telegram Update → Normalize → Access Check → Chat Queue (serialized)
   </tr>
   <tr>
     <td>
-      <h3>Voice Input</h3>
-      <p>Send voice/audio/video — short media uses local Qwen ASR; long media uses Aliyun Tingwu when configured, with safe local fallback.</p>
+      <h3>Voice And Video Input</h3>
+      <p>Voice/audio uses local Qwen or optional Tingwu ASR. Lark video up to 10 seconds gets sampled frames plus the original path; longer video is passed through for agent-directed inspection.</p>
     </td>
     <td>
       <h3>Full Audit Trail</h3>

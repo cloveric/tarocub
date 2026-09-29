@@ -46,10 +46,10 @@ export function renderLarkTurnPoolWait(locale: Locale): string {
     : "当前 AI worker 名额已满，这条消息已排队；有空位后会继续处理。";
 }
 
-export function renderLarkMediaTranscriptionFailure(locale: Locale): string {
+export function renderLarkAudioTranscriptionFailure(locale: Locale): string {
   return locale === "en"
-    ? "Audio/video transcription failed. Please send text or a shorter audio/video file."
-    : "音视频转写失败，请发送文字消息或较短的音视频文件。";
+    ? "Audio transcription failed. Please send text or a shorter audio file."
+    : "音频转写失败，请发送文字消息或较短的音频文件。";
 }
 
 export function renderLarkCronRuntimeMissing(locale: Locale): string {

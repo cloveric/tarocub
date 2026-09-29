@@ -2671,6 +2671,11 @@ describe("lark service", () => {
   it("transcribes Lark audio and video inputs before running the engine", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-"));
     const transcribeMedia = vi.fn(async (filePath: string) => `transcript:${path.basename(filePath)}`);
+    const prepareVideoInput = vi.fn(async (filePath: string) => ({
+      durationSeconds: 7,
+      framePaths: [`${filePath}.frames/frame-01.jpg`, `${filePath}.frames/frame-02.jpg`],
+      mode: "frames" as const,
+    }));
     const channel = fakeChannel({
       downloadResource: vi.fn(async (key: string) => Buffer.from(`media:${key}`)),
     });
@@ -2678,7 +2683,7 @@ describe("lark service", () => {
       checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
       handleAuthorizedMessage: vi.fn(async (_input: { text: string; files: string[] }) => ({ text: "done" })),
     };
-    const runtime = createLarkServiceRuntime({ transcribeMedia });
+    const runtime = createLarkServiceRuntime({ transcribeMedia, prepareVideoInput });
 
     try {
       await handleLarkMessage({
@@ -2697,15 +2702,105 @@ describe("lark service", () => {
       });
 
       expect(transcribeMedia).toHaveBeenCalledTimes(2);
-      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledWith(expect.objectContaining({
-        files: [],
-        text: expect.stringContaining("整理这两段素材"),
-      }));
       const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
+      expect(bridgeInput.text).toContain("整理这两段素材");
       expect(bridgeInput.text.match(/\[Bridge media transcription completed\]/g)).toHaveLength(2);
+      expect(bridgeInput.text).toContain("[Bridge video prepared]");
       expect(bridgeInput.text).toContain("Do not inspect, probe, split, or transcribe the attached media again");
       expect(bridgeInput.text).toContain("transcript:voice.m4a");
       expect(bridgeInput.text).toContain("transcript:clip.mp4");
+      expect(bridgeInput.files).toEqual(expect.arrayContaining([
+        expect.stringContaining("clip.mp4.frames/frame-01.jpg"),
+        expect.stringContaining("clip.mp4.frames/frame-02.jpg"),
+        expect.stringContaining("clip.mp4"),
+      ]));
+      expectLarkFinalAnswer(channel, "done");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps short silent videos actionable when audio transcription fails", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-video-silent-"));
+    const transcribeMedia = vi.fn(async () => {
+      throw new Error("video has no audio stream");
+    });
+    const prepareVideoInput = vi.fn(async (filePath: string) => ({
+      durationSeconds: 7,
+      framePaths: [`${filePath}.frames/frame-01.jpg`, `${filePath}.frames/frame-02.jpg`],
+      mode: "frames" as const,
+    }));
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async () => Buffer.from("video")),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string; files: string[] }) => ({
+        text: "I can see the game result",
+      })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime({ transcribeMedia, prepareVideoInput }),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_silent_video",
+          content: "看看这个视频",
+          resources: [{ type: "video", fileKey: "video_key", fileName: "game.mp4" }],
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
+      expect(bridgeInput.text).toContain("[Bridge video prepared]");
+      expect(bridgeInput.files).toEqual(expect.arrayContaining([
+        expect.stringContaining("game.mp4.frames/frame-01.jpg"),
+        expect.stringContaining("game.mp4.frames/frame-02.jpg"),
+        expect.stringContaining("game.mp4"),
+      ]));
+      expect(JSON.stringify(channel.send.mock.calls)).not.toContain("音视频转写失败");
+      expectLarkFinalAnswer(channel, "I can see the game result");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes videos over ten seconds directly without automatic transcription", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-video-long-"));
+    const transcribeMedia = vi.fn(async () => "should not run");
+    const prepareVideoInput = vi.fn(async () => ({
+      durationSeconds: 30,
+      framePaths: [],
+      mode: "direct" as const,
+    }));
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async () => Buffer.from("video")),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string; files: string[] }) => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime({ transcribeMedia, prepareVideoInput }),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_long_video",
+          content: "分析这个长视频",
+          resources: [{ type: "video", fileKey: "video_key", fileName: "long.mp4" }],
+        }),
+      });
+
+      expect(transcribeMedia).not.toHaveBeenCalled();
+      const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
+      expect(bridgeInput.files).toEqual([expect.stringContaining("long.mp4")]);
+      expect(bridgeInput.text).toContain("exceeds 10 seconds");
       expectLarkFinalAnswer(channel, "done");
     } finally {
       await rm(stateDir, { recursive: true, force: true });
@@ -2862,7 +2957,7 @@ describe("lark service", () => {
     }
   });
 
-  it("renders Lark media transcription failures in English when Lark locale is English", async () => {
+  it("renders Lark audio transcription failures in English when Lark locale is English", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-en-fail-"));
     const transcribeMedia = vi.fn(async () => {
       throw new Error("asr down");
@@ -2896,7 +2991,7 @@ describe("lark service", () => {
       expect(bridge.handleAuthorizedMessage).not.toHaveBeenCalled();
       expect(channel.send).toHaveBeenCalledWith(
         "oc_chat",
-        { text: "Audio/video transcription failed. Please send text or a shorter audio/video file." },
+        { text: "Audio transcription failed. Please send text or a shorter audio file." },
         { replyTo: "om_media_fail_en", replyInThread: false },
       );
     } finally {

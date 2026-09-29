@@ -2,6 +2,7 @@ import type { EngineApprovalDecision, EngineApprovalRequest } from "../codex/ada
 import { delegateToInstance as defaultDelegateToInstance } from "../bus/bus-client.js";
 import { loadBusConfig as defaultLoadBusConfig } from "../bus/bus-config.js";
 import type { TranscribeMediaOptions } from "../runtime/asr-cloud.js";
+import type { PreparedVideoInput } from "../runtime/video-input.js";
 import { ChatQueue, type ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { CronScheduler } from "../runtime/cron-scheduler.js";
 import type { ScannedSession } from "../runtime/session-scanner.js";
@@ -169,6 +170,7 @@ export interface LarkServiceRuntime {
   sessionRuntime?: LarkSessionRuntime;
   commentClient?: LarkCommentClientLike;
   transcribeMedia?: (filePath: string, options?: TranscribeMediaOptions) => Promise<string>;
+  prepareVideoInput?: (filePath: string, options?: { abortSignal?: AbortSignal }) => Promise<PreparedVideoInput>;
   detectLarkCli: () => Promise<LarkCliStatus>;
   createChat: (input: LarkChatCreateInput) => Promise<LarkChatCreateResult>;
   createDocument: (input: LarkDocumentCreateInput) => Promise<LarkDocumentCreateResult>;
@@ -188,6 +190,7 @@ export function createLarkServiceRuntime(options: {
   miniRuntime?: LarkMiniRuntime;
   sessionRuntime?: LarkSessionRuntime;
   transcribeMedia?: (filePath: string, options?: TranscribeMediaOptions) => Promise<string>;
+  prepareVideoInput?: (filePath: string, options?: { abortSignal?: AbortSignal }) => Promise<PreparedVideoInput>;
   detectLarkCli?: () => Promise<LarkCliStatus>;
   queuePolicy?: Partial<LarkQueuePolicy>;
 } = {}): LarkServiceRuntime {
@@ -210,6 +213,7 @@ export function createLarkServiceRuntime(options: {
     ...(options.sessionRuntime ? { sessionRuntime: options.sessionRuntime } : {}),
     ...(options.commentClient ? { commentClient: options.commentClient } : {}),
     ...(options.transcribeMedia ? { transcribeMedia: options.transcribeMedia } : {}),
+    ...(options.prepareVideoInput ? { prepareVideoInput: options.prepareVideoInput } : {}),
     detectLarkCli: options.detectLarkCli ?? detectLarkCliStatus,
     createChat: options.createChat ?? createLarkChatWithCli,
     createDocument: options.createDocument ?? createLarkDocumentWithCli,

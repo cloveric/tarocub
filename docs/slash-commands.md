@@ -138,10 +138,10 @@ These are message keywords, not slash commands.
 
 | Keyword | What It Does | Channels |
 |---|---|---|
-| 强制本地转写 | Force the local ASR path for the audio/video in this message. | Telegram, Lark |
-| 强制云端转写 | Force the Aliyun Tingwu cloud path (only when `TINGWU_ASR_DIR` is configured). | Telegram, Lark |
+| 强制本地转写 | Force the local ASR path for media that enters automatic transcription in this message. | Telegram, Lark |
+| 强制云端转写 | Force the Aliyun Tingwu cloud path for media that enters automatic transcription (only when `TINGWU_ASR_DIR` is configured). | Telegram, Lark |
 
-The keyword must travel **with** the media — as the caption of the same message, or as a text message in the same send burst, which the bridge merges into one turn. A bare voice note has no caption, and a keyword sent afterwards starts a new turn: it cannot reroute a transcription that is already running. Cloud ASR configuration (including where each env var must be set) is documented in the README's "Long-audio cloud ASR" section.
+The keyword must travel **with** the media — as the caption of the same message, or as a text message in the same send burst, which the bridge merges into one turn. A bare voice note has no caption, and a keyword sent afterwards starts a new turn: it cannot reroute a transcription that is already running. Lark video longer than 10 seconds bypasses automatic ASR and is passed to the engine by path, so these keywords do not reroute it. Cloud ASR configuration (including where each env var must be set) is documented in the README's "Long-audio cloud ASR" section.
 
 ## Lark-Native Notes
 

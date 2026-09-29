@@ -108,7 +108,7 @@ incomplete or malformed.
 | Compaction | `/compact` is executed through Harness `commands/execute`, never exposed as an ordinary model prompt |
 | Context | `/context` reads the durable `contextPressure` projection |
 | Web research | Native Harness search remains available; TaroCub also injects source-traceable `mcp__cctb_search__web_search` and `mcp__cctb_search__web_extract` tools when their providers are configured |
-| Long media | Lark transcribes inbound media before engine dispatch: 15 minutes or longer uses Aliyun Tingwu first, while shorter media and cloud failures use local Qwen ASR |
+| Media intake | Lark voice/audio is transcribed before dispatch, using Tingwu at 15 minutes or longer when configured and local Qwen otherwise; Lark video up to 10 seconds supplies sampled frames plus the original path, while longer video supplies the original path directly |
 | Group sessions | Ordinary Lark groups share one chat session; topic/thread groups isolate sessions by thread while access control remains anchored to the parent group |
 | Model / effort | Harness session model APIs validate provider/model and reasoning effort on each turn |
 | Goals | Native durable Goal create/read/watch/clear/resume; optional token budget is persisted across bridge restarts |
