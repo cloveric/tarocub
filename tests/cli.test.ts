@@ -53,7 +53,7 @@ describe("runCli", () => {
 
   it("keeps the generated Telegram transport prompt compact enough for every-turn use", () => {
     const instructions = telegramAgentInstructions();
-    expect(instructions.length).toBeLessThan(850);
+    expect(instructions.length).toBeLessThan(1050);
     expect(instructions.split("\n").length).toBeLessThanOrEqual(4);
     expect(instructions).toContain("bridge-managed");
     expect(instructions).toContain('"name":"send.file"');
@@ -66,6 +66,14 @@ describe("runCli", () => {
     expect(instructions).toContain("cron.toggle");
     expect(instructions).toContain("web_extract");
     expect(instructions).toContain("web_search");
+    expect(instructions).toContain("named-skill profile wins (XHS search→Camoufox)");
+    expect(instructions).not.toContain("(XHS→Camoufox)");
+    expect(instructions).toContain("blocked/dynamic→Scrapling");
+    expect(instructions).toContain("unavailable→report");
+    expect(instructions).toContain("No shell/AppleScript/relaunch/quit/managed-browser workaround");
+    expect(instructions).toContain("No CDP/9222/9223");
+    expect(instructions).toContain("main-Chrome cookies/keychain");
+    expect(instructions).not.toMatch(/only for a named skill/i);
   });
 
   it("keeps the v0.1.354 agent.md migration snapshot byte-for-byte frozen", () => {

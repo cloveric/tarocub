@@ -84,25 +84,35 @@ node dist/src/index.js lark service restart --instance <name>
 
 ## Doing the console step in the operator's browser
 
-The console needs a Feishu login. Preferred routes:
+The console needs a Feishu login. Browser precedence is:
 
-- **Native browser / Computer Use integration** — every engine should first use its
-  available browser tooling with the operator's already-open main Chrome and existing
-  Feishu session. Claude uses Claude Chrome when enabled; Codex uses its native Chrome /
-  Computer Use integration. Other engines use their exposed browser or Computer Use
-  integration. If a session does not expose main-Chrome control, report that limitation
-  instead of silently switching to another browser.
-- agent-browser's **own** managed Chrome is a fresh temp profile (NOT logged in) → it needs
-  a QR scan-login first; the session is saved to `~/.cctb/feishu-console-auth.json` so a
-  later run skips the scan.
-- Legacy CDP/debug-port workflows are compatibility fallbacks only. Use one only when the
-  operator explicitly requests that legacy path; never start ports 9222/9223, copy a Chrome
-  profile, or select CDP merely because a skill happens to mention a port.
-- The scope editor in the import dialog is a **Monaco** editor: plain typing triggers
-  bracket auto-close (mangles JSON), and `execCommand('insertText')` appends rather than
-  replaces. The reliable way: focus the editor, select-all (Cmd+A), then dispatch a
-  synthetic `paste` `ClipboardEvent` carrying the JSON (Monaco's paste handler replaces the
-  selection cleanly).
+1. A named skill keeps the browser/profile it documents. For example, Xiaohongshu search
+   uses its isolated Camoufox profile; it must not be redirected into the operator's Chrome.
+2. Otherwise, a signed-in task may use the operator's main Chrome only when the current
+   engine session actually exposes a main-Chrome/Computer Use tool. Claude Chrome is one
+   such route when enabled. TaroCub itself does not make that capability universal across
+   Codex, Kimi, DeepSeek, and Antigravity.
+3. If no main-Chrome tool is exposed, report the limitation. Do not improvise through
+   shell/AppleScript, read main-Chrome cookies or keychain data, relaunch Chrome, or silently
+   switch to another browser.
+4. Legacy CDP/debug-port workflows are compatibility fallbacks only. Use one only when the
+   operator explicitly requests that path; never attach to ports 9222/9223 or copy the main
+   Chrome profile merely because a skill happens to mention them.
+
+Public-URL retrieval is independent of signed-in browser control: use `web_extract` or the
+available browser first, fall back to Scrapling for blocked/dynamic pages, otherwise use web
+search, and disclose the web use with source links.
+
+agent-browser's **own** managed Chrome is a fresh temp profile (NOT logged in). It is not a
+fallback for a missing main-Chrome tool; use it only when a named workflow documents that
+isolated profile or the operator explicitly selects it. Persisted sessions, when supported,
+must use the path and scope documented by that named workflow.
+
+The scope editor in the import dialog is a **Monaco** editor: plain typing triggers
+bracket auto-close (mangles JSON), and `execCommand('insertText')` appends rather than
+replaces. The reliable way: focus the editor, select-all (Cmd+A), then dispatch a synthetic
+`paste` `ClipboardEvent` carrying the JSON (Monaco's paste handler replaces the selection
+cleanly).
 
 ## After the scope is live: the per-group toggle
 

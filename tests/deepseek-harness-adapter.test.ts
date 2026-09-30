@@ -10,9 +10,11 @@ import type {
   EngineStreamEvent,
 } from "../src/codex/adapter.js";
 import {
+  DEEPSEEK_HARNESS_SEARCH_TOOL_NOTE,
   DeepSeekHarnessAdapter,
   type DeepSeekHarnessGateway,
 } from "../src/codex/deepseek-harness-adapter.js";
+import { larkAgentInstructions } from "../src/lark/agent-instructions.js";
 import {
   DeepSeekHarnessRpcError,
   type DeepSeekHarnessProtocolHandlers,
@@ -192,6 +194,14 @@ async function waitForCall(gateway: FakeGateway, method: string, count = 1): Pro
 function completedReason(): { kind: "completed" } {
   return { kind: "completed" };
 }
+
+describe("DeepSeek Harness search instructions", () => {
+  it("keeps the blocked-page fallback and source disclosure in the adapter note", () => {
+    expect(DEEPSEEK_HARNESS_SEARCH_TOOL_NOTE).toContain("blocked or dynamic pages use Scrapling");
+    expect(DEEPSEEK_HARNESS_SEARCH_TOOL_NOTE).toContain("if both direct routes fail");
+    expect(DEEPSEEK_HARNESS_SEARCH_TOOL_NOTE).toContain("Disclose web use and cite source links");
+  });
+});
 
 describe("DeepSeekHarnessAdapter", () => {
   it("cancels and rejects a DeepSeek turn that exceeds the hard runtime timeout", async () => {
@@ -398,7 +408,7 @@ describe("DeepSeekHarnessAdapter", () => {
     const turn = adapter.sendUserMessage(sessionId, {
       text: "Find the latest release notes",
       files: [],
-      instructions: "Reply in Chinese.",
+      instructions: larkAgentInstructions({ engine: "deepseek", context: "chat" }),
     });
     await waitForCall(gateway, "session.prompt", 1);
     const prompt = gateway.calls.find((call) => call.method === "session.prompt")?.payload as {
@@ -406,7 +416,9 @@ describe("DeepSeekHarnessAdapter", () => {
     };
     const text = prompt.content[0]?.text ?? "";
     expect(text).toContain("<private_bridge_instructions>");
-    expect(text).toContain("Reply in Chinese.");
+    expect(text).toContain("Login: named-skill profile wins (XHS search→Camoufox)");
+    expect(text).toContain("No CDP/9222/9223");
+    expect(text).toContain("blocked/dynamic→Scrapling");
     expect(text).toContain("`mcp__cctb_search__web_extract`");
     expect(text).toContain("`mcp__cctb_search__web_search`");
     expect(text).toContain("MUST call `mcp__cctb_search__web_search`");

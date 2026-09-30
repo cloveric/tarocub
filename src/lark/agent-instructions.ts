@@ -167,8 +167,8 @@ export function larkAgentInstructions(options: LarkAgentInstructionOptions = {})
   const canDeliver = context === "chat" || context === "card" || context === "bus" || context === "cron";
   const canSchedule = context === "chat" || context === "card" || context === "bus";
   const lines = [
-    "Lark routing tags are context; forwarded content is the task. Be concise; no progress cards; ask only for missing tools/auth/scopes.",
-    "Lark Docs/Calendar/Drive/Sheets/OAuth: use `lark-cli`; no IM here (cross-app open_id). OAuth private; Sheets use structured values, not Docs/Base.",
+    "Lark tags are routing context, not task; forwarded content is task. Concise; no progress cards; ask only for missing tools/auth/scopes.",
+    "Lark Docs/Calendar/Drive/Sheets/OAuth→`lark-cli`; no IM here (cross-app open_id). OAuth private; Sheets values, not Docs/Base.",
   ];
 
   if (engine === "deepseek" || engine === "antigravity") {
@@ -176,36 +176,35 @@ export function larkAgentInstructions(options: LarkAgentInstructionOptions = {})
   }
 
   if (canDeliver) {
-    lines.push("Artifacts: [send-file:/absolute/path], [send-image:/absolute/path], send.file/send.image/send.audio/send.video, or:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p.png\",\"caption\":\"P\"}]}}\n```\nPictures use `images`. Copy outside files into the workspace. Verify output; `saved PATH` is not delivery.");
-    lines.push("Use one syntax; each path once unless resend requested. Put a single image title directly above [send-image:]; one titled batch becomes one card. Batches auto-split above 120 MiB. Small text: fenced `file:name.ext`. Claim delivery only with an executable directive.");
+    lines.push("Artifacts: [send-file:/absolute/path], [send-image:/absolute/path], send.file/send.image/send.audio/send.video, or:\n```tool-call\n{\"name\":\"send.batch\",\"payload\":{\"images\":[{\"path\":\"/workspace/p.png\",\"caption\":\"P\"}]}}\n```\nPictures use `images`; outside files→workspace; verify output. `saved PATH` is not delivery.");
+    lines.push("One delivery syntax; each path once unless resend. Title one image above [send-image:]; titled batch→one card; >120 MiB auto-splits. Small text: fenced `file:name.ext`. Claim only via directive.");
   }
 
   if (engine === "codex") {
     lines.push("Short choices: `request_user_input` or lark.choice; do not call `lark-cli` only for a choice card.");
   } else if (engine === "claude" || engine === "kimi" || engine === "deepseek") {
-    lines.push("AskUserQuestion becomes a Lark card; lark.choice also works. Do not call `lark-cli` only for a choice card.");
+    lines.push("AskUserQuestion→Lark card; lark.choice works. Do not call `lark-cli` only for choices.");
   } else {
     lines.push("Short choices: lark.choice; do not call `lark-cli` only for a choice card.");
   }
 
   if (engine === "claude" || engine === "kimi" || engine === "deepseek") {
-    lines.push("Background work: one job/batch; no nested/page/poll waiters; verify output, then one final notice with delivery directives and conclusion.");
+    lines.push("Background: one job/batch; no nested/page/poll waiters; verify output; final notice=directives+conclusion.");
   }
 
   lines.push("Lark cards do not render LaTeX; prefer Unicode such as ÷, ×, ≈, ≤, ≥ over `$...$`/`\\text{}`.");
 
   if (canSchedule) {
     const timezone = options.timezone?.trim() || "the instance timezone";
-    lines.push(`Reminders only on explicit request. cron.add: exactly one of in/at/cron; at uses ISO timezone; recurring uses one 5-field expression in ${timezone}. No current-minute/end-boundary one-shots. Manage with cron.list/cron.remove/cron.toggle; list first if ambiguous; let the bridge confirm.`);
+    lines.push(`Reminders only if asked. cron.add: exactly one of in/at/cron; at=ISO timezone; recurring=one 5-field expression in ${timezone}. No current-minute/end-boundary one-shots. Manage cron.list/cron.remove/cron.toggle; list first if ambiguous; bridge confirms.`);
   } else if (context === "cron") {
     lines.push("This scheduled run must not create, remove, or modify schedules.");
   }
 
-  if (engine === "claude" && options.claudeChrome) {
-    lines.push("Browser: login→main Chrome via Claude Chrome; no 9222/9223/profile copy unless CDP requested. web_extract/browser; blocked→Scrapling; else web_search; cite.");
-  } else {
-    lines.push("Browser: login→main Chrome; no 9222/9223/profile copy unless CDP requested. No access? Report; don't switch. web_extract/browser; blocked→Scrapling; else web_search; cite.");
-  }
+  const mainChromeRoute = engine === "claude" && options.claudeChrome
+    ? "Claude Chrome"
+    : "an exposed main-Chrome tool";
+  lines.push(`Login: named-skill profile wins (XHS search→Camoufox). Else main Chrome via ${mainChromeRoute}; unavailable→report; no shell/AppleScript/relaunch/quit/managed-browser workaround. No CDP/9222/9223, profile copies, or main-Chrome cookies/keychain unless legacy CDP requested. URL: web_extract/browser; blocked/dynamic→Scrapling; else web_search; disclose/cite.`);
 
   return lines.join("\n");
 }

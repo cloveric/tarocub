@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { syncKimiWorkspaceInstructions } from "../src/codex/kimi-workspace.js";
+import { larkAgentInstructions } from "../src/lark/agent-instructions.js";
 
 const roots: string[] = [];
 
@@ -90,6 +91,39 @@ describe("syncKimiWorkspaceInstructions", () => {
     expect(await readFile(path.join(configDir, "agents", "agent.md"), "utf8")).toContain(
       "Current bridge guidance.",
     );
+  });
+
+  it("replaces old browser guidance with the current Kimi login policy", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kimi-workspace-test-"));
+    roots.push(root);
+    const agentDir = path.join(root, ".kimi-code", "agents");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(path.join(agentDir, "agent.md"), [
+      "---",
+      "name: agent",
+      "description: Project main agent",
+      "override: true",
+      "---",
+      "",
+      "${base_prompt}",
+      "",
+      "${plugin_sections}",
+      "",
+      "<!-- TaroCub Kimi system instructions: start -->",
+      "Browser: 9222/9223 only for a named skill.",
+      "<!-- TaroCub Kimi system instructions: end -->",
+      "",
+    ].join("\n"), "utf8");
+
+    await syncKimiWorkspaceInstructions(
+      root,
+      larkAgentInstructions({ engine: "kimi", context: "chat" }),
+    );
+
+    const updated = await readFile(path.join(agentDir, "agent.md"), "utf8");
+    expect(updated).toContain("Login: named-skill profile wins (XHS search→Camoufox)");
+    expect(updated).toContain("No CDP/9222/9223");
+    expect(updated).not.toContain("9222/9223 only for a named skill");
   });
 
   it("removes a generated wrapper when managed guidance is cleared", async () => {

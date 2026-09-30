@@ -16,47 +16,67 @@ function restoreEnv(name: string, value: string | undefined): void {
 }
 
 describe("larkAgentInstructions", () => {
-  it("keeps every engine-specific chat prompt within the compact budget", () => {
+  it("keeps every engine, Chrome flag, and context within the compact budget", () => {
     for (const engine of ["codex", "claude", "kimi", "deepseek", "antigravity"] as const) {
-      const instructions = larkAgentInstructions({
-        engine,
-        claudeChrome: true,
-        timezone: "Asia/Shanghai",
-        context: "chat",
-      });
-      expect(instructions.length, engine).toBeLessThanOrEqual(1750);
-      expect(instructions.split("\n").length, engine).toBeLessThanOrEqual(14);
+      for (const claudeChrome of [false, true]) {
+        for (const context of ["chat", "card", "comment", "cron", "bus", "meeting"] as const) {
+          const instructions = larkAgentInstructions({
+            engine,
+            claudeChrome,
+            timezone: "Asia/Shanghai",
+            context,
+          });
+          expect(instructions.length, `${engine}/${claudeChrome}/${context}`).toBeLessThanOrEqual(1750);
+          expect(instructions.split("\n").length, `${engine}/${claudeChrome}/${context}`).toBeLessThanOrEqual(14);
+        }
+      }
     }
   });
 
-  it("advertises engine-specific choices while preferring main Chrome for every engine", () => {
+  it("advertises engine-specific choices without overstating browser access", () => {
     const codex = larkAgentInstructions({ engine: "codex", context: "chat" });
     expect(codex).toContain("request_user_input");
     expect(codex).not.toContain("AskUserQuestion");
 
     const claude = larkAgentInstructions({ engine: "claude", claudeChrome: true, context: "chat" });
-    expect(claude).toContain("AskUserQuestion becomes a Lark card");
-    expect(claude).toContain("main Chrome");
-    expect(claude).toContain("Claude Chrome");
-    expect(claude).toContain("no 9222/9223/profile copy unless CDP requested");
+    expect(claude).toContain("AskUserQuestion→Lark card");
 
     const kimi = larkAgentInstructions({ engine: "kimi", claudeChrome: true, context: "chat" });
-    expect(kimi).toContain("AskUserQuestion becomes a Lark card");
+    expect(kimi).toContain("AskUserQuestion→Lark card");
 
     const antigravity = larkAgentInstructions({ engine: "antigravity", context: "chat" });
     expect(antigravity).toContain("Short choices: lark.choice");
     expect(antigravity).not.toContain("AskUserQuestion");
     expect(antigravity).not.toContain("request_user_input");
 
+    const contexts = ["chat", "card", "comment", "cron", "bus", "meeting"] as const;
     for (const engine of ["codex", "claude", "kimi", "deepseek", "antigravity"] as const) {
-      const instructions = larkAgentInstructions({
-        engine,
-        claudeChrome: engine === "claude",
-        context: "chat",
-      });
-      expect(instructions, engine).toContain("main Chrome");
-      expect(instructions, engine).toContain("no 9222/9223/profile copy unless CDP requested");
-      expect(instructions, engine).not.toContain("named skill");
+      for (const claudeChrome of [false, true]) {
+        const loginLines = contexts.map((context) => {
+          const instructions = larkAgentInstructions({ engine, claudeChrome, context });
+          const lines = instructions.split("\n").filter((line) => line.startsWith("Login:"));
+          expect(lines, `${engine}/${claudeChrome}/${context}`).toHaveLength(1);
+          return lines[0];
+        });
+        expect(new Set(loginLines).size, `${engine}/${claudeChrome}`).toBe(1);
+
+        const login = loginLines[0] ?? "";
+        expect(login).toContain("named-skill profile wins (XHS search→Camoufox)");
+        expect(login).not.toContain("(XHS→Camoufox)");
+        expect(login.indexOf("named-skill profile wins")).toBeLessThan(login.indexOf("main Chrome"));
+        expect(login).toContain("unavailable→report");
+        expect(login).toContain("no shell/AppleScript/relaunch/quit/managed-browser workaround");
+        expect(login).toContain("No CDP/9222/9223, profile copies, or main-Chrome cookies/keychain unless legacy CDP requested");
+        expect(login).toContain("blocked/dynamic→Scrapling");
+        expect(login).toContain("disclose/cite");
+        expect(login).not.toMatch(/only for a named skill/i);
+        if (engine === "claude" && claudeChrome) {
+          expect(login).toContain("main Chrome via Claude Chrome");
+        } else {
+          expect(login).toContain("main Chrome via an exposed main-Chrome tool");
+          expect(login).not.toContain("Claude Chrome");
+        }
+      }
     }
   });
 
@@ -92,31 +112,35 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("```tool-call");
     expect(instructions).toContain('"name":"send.batch"');
     expect(instructions).toContain('"images"');
-    expect(instructions).toContain("Copy outside files into the workspace");
+    expect(instructions).toContain("outside files→workspace");
     expect(instructions).toContain("saved PATH");
-    expect(instructions).toContain("each path once");
-    expect(instructions).toContain("title directly above [send-image:]");
-    expect(instructions).toContain("auto-split above 120 MiB");
-    expect(instructions).toContain("Claim delivery only with an executable directive");
+    expect(instructions).toContain("One delivery syntax; each path once unless resend");
+    expect(instructions).toContain("Title one image above [send-image:]");
+    expect(instructions).toContain(">120 MiB auto-splits");
+    expect(instructions).toContain("Claim only via directive");
     expect(instructions).toContain("Lark cards do not render LaTeX");
     expect(instructions).toContain("÷, ×, ≈, ≤, ≥");
-    expect(instructions).toContain("explicit request");
-    expect(instructions).toContain("one of in/at/cron");
+    expect(instructions).toContain("Reminders only if asked");
+    expect(instructions).toContain("exactly one of in/at/cron");
     expect(instructions).toContain("cron.list/cron.remove/cron.toggle");
+    expect(instructions).toContain("list first if ambiguous");
     expect(instructions).toContain("Asia/Shanghai");
     expect(instructions).toContain("web_extract/browser");
     expect(instructions).toContain("Scrapling");
-    expect(instructions).toContain("no 9222/9223/profile copy unless CDP requested");
-    expect(instructions).toContain("No access? Report; don't switch");
+    expect(instructions).toContain("named-skill profile wins (XHS search→Camoufox)");
+    expect(instructions).not.toContain("(XHS→Camoufox)");
+    expect(instructions).toContain("No CDP/9222/9223, profile copies, or main-Chrome cookies/keychain unless legacy CDP requested");
+    expect(instructions).toContain("blocked/dynamic→Scrapling");
+    expect(instructions).toContain("disclose/cite");
     expect(instructions).toContain("cite");
   });
 
   it("keeps background procedure only for engines that expose background workers", () => {
-    expect(larkAgentInstructions({ engine: "claude" })).toContain("Background work");
-    expect(larkAgentInstructions({ engine: "kimi" })).toContain("Background work");
-    expect(larkAgentInstructions({ engine: "deepseek" })).toContain("Background work");
-    expect(larkAgentInstructions({ engine: "codex" })).not.toContain("Background work");
-    expect(larkAgentInstructions({ engine: "antigravity" })).not.toContain("Background work");
+    expect(larkAgentInstructions({ engine: "claude" })).toContain("Background:");
+    expect(larkAgentInstructions({ engine: "kimi" })).toContain("Background:");
+    expect(larkAgentInstructions({ engine: "deepseek" })).toContain("Background:");
+    expect(larkAgentInstructions({ engine: "codex" })).not.toContain("Background:");
+    expect(larkAgentInstructions({ engine: "antigravity" })).not.toContain("Background:");
   });
 
   it("keeps delivery follow-up checks out of the stable prompt", () => {
