@@ -121,7 +121,7 @@ describe("syncKimiWorkspaceInstructions", () => {
     );
 
     const updated = await readFile(path.join(agentDir, "agent.md"), "utf8");
-    expect(updated).toContain("Login: named-skill profile wins (XHS search→Camoufox)");
+    expect(updated).toContain("Login: selected skill's declared browser/profile wins");
     expect(updated).toContain("No CDP/9222/9223");
     expect(updated).not.toContain("9222/9223 only for a named skill");
   });

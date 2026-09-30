@@ -2034,7 +2034,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
         startedAt: Date.now() - 10,
         locale: "zh",
         cfg: { engine: "claude", budgetUsd: 0.5 },
-        normalized: createNormalizedMessage("帮我生成 2 张小红书图片"),
+        normalized: createNormalizedMessage("帮我生成 2 张系列图片"),
         context: {
           api,
           bridge: bridge as never,
@@ -2139,7 +2139,7 @@ describe("executeWorkflowAwareTelegramTurn", () => {
       failureHint: undefined as string | undefined,
     };
     const inputPath = path.join(root, "workspace", ".telegram-files", "input.png");
-    const generatedPath = path.join(root, "workspace", "xhs-images", "deck", "01-cover.png");
+    const generatedPath = path.join(root, "workspace", "image-decks", "deck", "01-cover.png");
     await mkdir(path.dirname(inputPath), { recursive: true });
     await writeFile(inputPath, "input", "utf8");
     const bridge = {

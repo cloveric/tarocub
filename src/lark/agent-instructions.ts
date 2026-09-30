@@ -204,7 +204,7 @@ export function larkAgentInstructions(options: LarkAgentInstructionOptions = {})
   const mainChromeRoute = engine === "claude" && options.claudeChrome
     ? "Claude Chrome"
     : "an exposed main-Chrome tool";
-  lines.push(`Login: named-skill profile wins (XHS search→Camoufox). Else main Chrome via ${mainChromeRoute}; unavailable→report; no shell/AppleScript/relaunch/quit/managed-browser workaround. No CDP/9222/9223, profile copies, or main-Chrome cookies/keychain unless legacy CDP requested. URL: web_extract/browser; blocked/dynamic→Scrapling; else web_search; disclose/cite.`);
+  lines.push(`Login: selected skill's declared browser/profile wins. Else main Chrome via ${mainChromeRoute}; unavailable→report; no shell/AppleScript/relaunch/quit/managed-browser workaround. No CDP/9222/9223, profile copies, or main-Chrome cookies/keychain unless legacy CDP requested. URL: web_extract/browser; blocked/dynamic→Scrapling; else web_search; disclose/cite.`);
 
   return lines.join("\n");
 }

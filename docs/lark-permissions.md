@@ -86,8 +86,8 @@ node dist/src/index.js lark service restart --instance <name>
 
 The console needs a Feishu login. Browser precedence is:
 
-1. A named skill keeps the browser/profile it documents. For example, Xiaohongshu search
-   uses its isolated Camoufox profile; it must not be redirected into the operator's Chrome.
+1. A named skill keeps the browser/profile it documents. Workflow-specific browser and
+   login isolation belongs in that skill rather than in TaroCub's shared system prompt.
 2. Otherwise, a signed-in task may use the operator's main Chrome only when the current
    engine session actually exposes a main-Chrome/Computer Use tool. Claude Chrome is one
    such route when enabled. TaroCub itself does not make that capability universal across

@@ -66,8 +66,7 @@ describe("runCli", () => {
     expect(instructions).toContain("cron.toggle");
     expect(instructions).toContain("web_extract");
     expect(instructions).toContain("web_search");
-    expect(instructions).toContain("named-skill profile wins (XHS search→Camoufox)");
-    expect(instructions).not.toContain("(XHS→Camoufox)");
+    expect(instructions).toContain("selected skill's declared browser/profile wins");
     expect(instructions).toContain("blocked/dynamic→Scrapling");
     expect(instructions).toContain("unavailable→report");
     expect(instructions).toContain("No shell/AppleScript/relaunch/quit/managed-browser workaround");

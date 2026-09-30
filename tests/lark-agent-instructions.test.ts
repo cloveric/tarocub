@@ -61,9 +61,8 @@ describe("larkAgentInstructions", () => {
         expect(new Set(loginLines).size, `${engine}/${claudeChrome}`).toBe(1);
 
         const login = loginLines[0] ?? "";
-        expect(login).toContain("named-skill profile wins (XHS search→Camoufox)");
-        expect(login).not.toContain("(XHS→Camoufox)");
-        expect(login.indexOf("named-skill profile wins")).toBeLessThan(login.indexOf("main Chrome"));
+        expect(login).toContain("selected skill's declared browser/profile wins");
+        expect(login.indexOf("selected skill's declared browser/profile wins")).toBeLessThan(login.indexOf("main Chrome"));
         expect(login).toContain("unavailable→report");
         expect(login).toContain("no shell/AppleScript/relaunch/quit/managed-browser workaround");
         expect(login).toContain("No CDP/9222/9223, profile copies, or main-Chrome cookies/keychain unless legacy CDP requested");
@@ -127,8 +126,7 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("Asia/Shanghai");
     expect(instructions).toContain("web_extract/browser");
     expect(instructions).toContain("Scrapling");
-    expect(instructions).toContain("named-skill profile wins (XHS search→Camoufox)");
-    expect(instructions).not.toContain("(XHS→Camoufox)");
+    expect(instructions).toContain("selected skill's declared browser/profile wins");
     expect(instructions).toContain("No CDP/9222/9223, profile copies, or main-Chrome cookies/keychain unless legacy CDP requested");
     expect(instructions).toContain("blocked/dynamic→Scrapling");
     expect(instructions).toContain("disclose/cite");

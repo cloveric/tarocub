@@ -1018,7 +1018,7 @@ async function sendLarkPath(input: {
   if (deliveryKind === "image") {
     // A captioned image (e.g. a titled send.batch entry, or send.image with a
     // caption) is delivered as a single card pairing the title with the image,
-    // so a 小红书 P1/P2/… series stays legible. A failed image-key upload can
+    // so a titled P1/P2/... image series stays legible. A failed image-key upload can
     // safely fall back; an ambiguous card ACK must not, because it may duplicate.
     if (input.caption) {
       const imgKey = await uploadLarkImageKey(input.channel, body).catch(() => undefined);
@@ -1151,7 +1151,7 @@ export function captionForLarkImage(text: string, tagIndex: number): string | un
 /**
  * Builds a Card 2.0 holding one or more images, each preceded by its caption (if
  * any). One image → a single titled card; many images → the whole validated batch
- * in one card (a 小红书 series stays grouped). Feishu's card-size ceiling is still
+ * in one card (a multi-image series stays grouped). Feishu's card-size ceiling is still
  * discovered at send time and handled by splitting.
  */
 function buildLarkImageCard(items: Array<{ caption?: string; imgKey: string }>): Record<string, unknown> {
@@ -1263,7 +1263,7 @@ async function sendLarkImageArtifactBatch(
 
 /**
  * Delivers a batch of images as a SINGLE card (each image keeps its
- * own caption above it) so a titled series — e.g. a 小红书 P1/P2/… deck — arrives as
+ * own caption above it) so a titled P1/P2/... image deck arrives as
  * one grouped deliverable rather than one card per image. Validated batches stay in
  * one card unless Feishu rejects the card as too large; then we split it in half and
  * retry each half (see sendLarkImageCardOrSplit). Any image whose upload fails — or a

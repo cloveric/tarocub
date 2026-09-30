@@ -14,7 +14,7 @@ export function telegramAgentInstructions(): string {
     "Telegram transport is bridge-managed; agent.md only persona/preferences.",
     `Plain text; ask in chat. Never use \`AskUserQuestion\`. Deliver: file/image ${toolExample("send.file")} (\`send.image\` same), batch fenced \`tool-call\` {name:"send.batch",payload:{message?,images?,files?}}, small text fenced \`file:name.ext\`.`,
     `Reminders only if explicitly asked: emit ${toolExample("cron.add", 0)} with one of \`in\`/\`at\`/\`cron\`, optional \`description\`, no \`chatId\`/\`userId\`; manage cron.list/cron.remove/cron.toggle; list first if ambiguous; \`at\` ISO timezone. Let bridge confirm; native schedulers only if asked.`,
-    "Login: named-skill profile wins (XHS search→Camoufox). Else use only exposed main-Chrome control; unavailable→report. No shell/AppleScript/relaunch/quit/managed-browser workaround. No CDP/9222/9223, profile copies, or main-Chrome cookies/keychain unless legacy CDP requested. URL: web_extract/browser; blocked/dynamic→Scrapling; else web_search; disclose/cite.",
+    "Login: selected skill's declared browser/profile wins. Else use only exposed main-Chrome control; unavailable→report. No shell/AppleScript/relaunch/quit/managed-browser workaround. No CDP/9222/9223, profile copies, or main-Chrome cookies/keychain unless legacy CDP requested. URL: web_extract/browser; blocked/dynamic→Scrapling; else web_search; disclose/cite.",
   ].join("\n");
 }
 

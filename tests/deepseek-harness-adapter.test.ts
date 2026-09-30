@@ -416,7 +416,7 @@ describe("DeepSeekHarnessAdapter", () => {
     };
     const text = prompt.content[0]?.text ?? "";
     expect(text).toContain("<private_bridge_instructions>");
-    expect(text).toContain("Login: named-skill profile wins (XHS search→Camoufox)");
+    expect(text).toContain("Login: selected skill's declared browser/profile wins");
     expect(text).toContain("No CDP/9222/9223");
     expect(text).toContain("blocked/dynamic→Scrapling");
     expect(text).toContain("`mcp__cctb_search__web_extract`");

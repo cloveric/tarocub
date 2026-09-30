@@ -85,7 +85,7 @@ describe("lark service", () => {
       });
 
       const updated = await readFile(agentPath, "utf8");
-      expect(updated).toContain("Login: named-skill profile wins (XHS search→Camoufox)");
+      expect(updated).toContain("Login: selected skill's declared browser/profile wins");
       expect(updated).toContain("No CDP/9222/9223");
       expect(updated).not.toContain("9222/9223 only for a named skill");
       await (bridge as any).adapter.destroy();
@@ -12309,7 +12309,7 @@ describe("lark service", () => {
           toolName: "request_user_input_async",
           toolInput: {
             questions: [{
-              title: "这套 8 张小红书图文用哪种风格？",
+              title: "这套 8 张系列图文用哪种风格？",
               options: ["高精度手绘科技科普（推荐）", "编辑插画水彩／现代绘本", "日式精致插画／马克笔"],
             }],
           },
@@ -12328,12 +12328,12 @@ describe("lark service", () => {
         stateDir,
         message: fakeLarkMessage({
           messageId: "om_codex_async_choice",
-          content: "制作小红书图文",
+          content: "制作系列图文",
         }),
       });
 
       const rendered = JSON.stringify(channel.send.mock.calls);
-      expect(rendered).toContain("这套 8 张小红书图文用哪种风格？");
+      expect(rendered).toContain("这套 8 张系列图文用哪种风格？");
       expect(rendered).toContain("高精度手绘科技科普（推荐）");
       expect(rendered).toContain("编辑插画水彩／现代绘本");
       expect(rendered).toContain("日式精致插画／马克笔");
