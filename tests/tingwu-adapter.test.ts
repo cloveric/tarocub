@@ -23,7 +23,124 @@ async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
   throw new Error(`timed out waiting for ${filePath}`);
 }
 
+async function installImportStubs(root: string): Promise<string> {
+  const fakeModules = path.join(root, "fake-modules");
+  const aliyunRoot = path.join(fakeModules, "aliyunsdkcore");
+  const authRoot = path.join(aliyunRoot, "auth");
+  await mkdir(authRoot, { recursive: true });
+  await writeFile(path.join(aliyunRoot, "__init__.py"), "", "utf8");
+  await writeFile(path.join(authRoot, "__init__.py"), "", "utf8");
+  await writeFile(path.join(authRoot, "credentials.py"), [
+    "class AccessKeyCredential:",
+    "    def __init__(self, access_key_id, access_key_secret): pass",
+    "",
+  ].join("\n"), "utf8");
+  await writeFile(path.join(aliyunRoot, "client.py"), [
+    "class AcsClient:",
+    "    def __init__(self, region_id, credential): pass",
+    "",
+  ].join("\n"), "utf8");
+  await writeFile(path.join(aliyunRoot, "request.py"), [
+    "class CommonRequest:",
+    "    pass",
+    "",
+  ].join("\n"), "utf8");
+  return fakeModules;
+}
+
+async function renderTranscript(root: string, payload: unknown): Promise<string> {
+  const fakeModules = await installImportStubs(root);
+  const payloadPath = path.join(root, `payload-${crypto.randomUUID()}.json`);
+  const runnerPath = path.join(root, "render_transcript.py");
+  const adapterPath = path.resolve("integrations/tingwu-asr/tingwu_transcribe.py");
+  await writeFile(payloadPath, JSON.stringify(payload), "utf8");
+  await writeFile(runnerPath, [
+    "import importlib.util",
+    "import json",
+    "import sys",
+    "from pathlib import Path",
+    "spec = importlib.util.spec_from_file_location('tingwu_adapter', sys.argv[1])",
+    "module = importlib.util.module_from_spec(spec)",
+    "spec.loader.exec_module(module)",
+    "payload = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))",
+    "print(module.build_transcript_text(payload), end='')",
+    "",
+  ].join("\n"), "utf8");
+
+  const result = spawnSync("python3", [runnerPath, adapterPath, payloadPath], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONPATH: fakeModules },
+  });
+  if (result.status !== 0) {
+    throw new Error(`transcript renderer failed: ${result.stderr}`);
+  }
+  return result.stdout;
+}
+
 describe("official Tingwu adapter", () => {
+  it.skipIf(!HAS_PYTHON3)("rebuilds paragraphs without deleting repeated words", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cctb-tingwu-text-"));
+    try {
+      const rendered = await renderTranscript(root, {
+        Transcription: {
+          Paragraphs: [
+            {
+              SpeakerId: "1",
+              Words: [
+                { Text: "我" }, { Text: "爱" }, { Text: "我" },
+                { Text: "的" }, { Text: "家" },
+              ],
+            },
+            {
+              SpeakerId: "2",
+              Words: [
+                { Text: "E" }, { Text: "F" }, { Text: "T" },
+                { Text: "works" }, { Text: "well" }, { Text: "." },
+              ],
+            },
+            {
+              SpeakerId: "1",
+              Words: [{ Text: "我" }, { Text: "再" }, { Text: "说" }, { Text: "我" }],
+            },
+          ],
+        },
+      });
+
+      expect(rendered).toBe([
+        "发言人1：我爱我的家",
+        "发言人2：EFT works well.",
+        "发言人1：我再说我",
+      ].join("\n"));
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it.skipIf(!HAS_PYTHON3)("omits speaker labels for one speaker and preserves fallback repeats", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cctb-tingwu-text-"));
+    try {
+      expect(await renderTranscript(root, {
+        Transcription: {
+          Paragraphs: [
+            { SpeakerId: "1", Text: "第一段" },
+            { SpeakerId: "1", Text: "第二段" },
+          ],
+        },
+      })).toBe("第一段\n第二段");
+
+      expect(await renderTranscript(root, {
+        Results: [
+          { Text: "重复" },
+          { Text: "中间" },
+          { Text: "重复" },
+          { Text: "重复" },
+        ],
+      })).toBe("重复\n中间\n重复");
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
   it.skipIf(!HAS_PYTHON3)("deletes its temporary OSS object when SIGTERM interrupts polling", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cctb-tingwu-signal-"));
     const fakeModules = path.join(root, "fake-modules");

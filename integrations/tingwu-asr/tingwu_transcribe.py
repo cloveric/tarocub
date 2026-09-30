@@ -295,12 +295,66 @@ def extract_text(value: Any) -> list[str]:
     walk(value)
 
     deduped: list[str] = []
-    seen: set[str] = set()
     for line in lines:
-        if line not in seen:
-            seen.add(line)
+        if not deduped or deduped[-1] != line:
             deduped.append(line)
     return deduped
+
+
+def _join_tokens(tokens: list[str]) -> str:
+    """Join Tingwu word tokens with spaces only where English needs them."""
+    out = ""
+    previous = ""
+    for token in tokens:
+        if not token:
+            continue
+        spelled = (
+            len(previous.strip()) == 1
+            and len(token.strip()) == 1
+            and previous.strip().isalpha()
+            and token.strip().isalpha()
+        )
+        if (
+            out
+            and not spelled
+            and out[-1].isascii()
+            and out[-1].isalnum()
+            and token[0].isascii()
+            and token[0].isalnum()
+        ):
+            out += " "
+        out += token
+        previous = token
+    return out.strip()
+
+
+def build_transcript_text(value: Any) -> str:
+    """Rebuild full text from Tingwu paragraphs without dropping repeated words."""
+    root = value.get("Transcription", value) if isinstance(value, dict) else value
+    paragraphs = root.get("Paragraphs") if isinstance(root, dict) else None
+    if isinstance(paragraphs, list) and paragraphs:
+        rows: list[tuple[str, str]] = []
+        for paragraph in paragraphs:
+            if not isinstance(paragraph, dict):
+                continue
+            words = paragraph.get("Words") or []
+            text = _join_tokens(
+                [str(word.get("Text", "")) for word in words if isinstance(word, dict)]
+            )
+            if not text:
+                text = str(paragraph.get("Text", "")).strip()
+            if text:
+                rows.append((str(paragraph.get("SpeakerId", "")), text))
+
+        speakers = {speaker for speaker, _text in rows if speaker}
+        if len(speakers) > 1:
+            return "\n".join(
+                f"发言人{speaker}：{text}" if speaker else text
+                for speaker, text in rows
+            )
+        return "\n".join(text for _speaker, text in rows)
+
+    return "\n".join(extract_text(value))
 
 
 def write_json(path: Path, data: Any) -> None:
@@ -393,8 +447,7 @@ def main() -> int:
 
         transcription = download_json(transcription_url)
         write_json(out_dir / "transcription.json", transcription)
-        lines = extract_text(transcription)
-        write_text(out_dir / "transcription.txt", "\n".join(lines))
+        write_text(out_dir / "transcription.txt", build_transcript_text(transcription))
         print(f"saved: {out_dir / 'transcription.txt'}")
         return 0
     except TerminationRequested as error:
