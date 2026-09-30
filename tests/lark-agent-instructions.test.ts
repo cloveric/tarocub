@@ -29,7 +29,7 @@ describe("larkAgentInstructions", () => {
     }
   });
 
-  it("advertises only choice and browser capabilities the selected engine has", () => {
+  it("advertises engine-specific choices while preferring main Chrome for every engine", () => {
     const codex = larkAgentInstructions({ engine: "codex", context: "chat" });
     expect(codex).toContain("request_user_input");
     expect(codex).not.toContain("AskUserQuestion");
@@ -37,17 +37,27 @@ describe("larkAgentInstructions", () => {
     const claude = larkAgentInstructions({ engine: "claude", claudeChrome: true, context: "chat" });
     expect(claude).toContain("AskUserQuestion becomes a Lark card");
     expect(claude).toContain("main Chrome");
-    expect(claude).toContain("Never use 9222/9223");
-    expect(claude).toContain("user explicitly asks for legacy CDP");
+    expect(claude).toContain("Claude Chrome");
+    expect(claude).toContain("no 9222/9223/profile copy unless CDP requested");
 
     const kimi = larkAgentInstructions({ engine: "kimi", claudeChrome: true, context: "chat" });
     expect(kimi).toContain("AskUserQuestion becomes a Lark card");
-    expect(kimi).not.toContain("main Chrome");
 
     const antigravity = larkAgentInstructions({ engine: "antigravity", context: "chat" });
     expect(antigravity).toContain("Short choices: lark.choice");
     expect(antigravity).not.toContain("AskUserQuestion");
     expect(antigravity).not.toContain("request_user_input");
+
+    for (const engine of ["codex", "claude", "kimi", "deepseek", "antigravity"] as const) {
+      const instructions = larkAgentInstructions({
+        engine,
+        claudeChrome: engine === "claude",
+        context: "chat",
+      });
+      expect(instructions, engine).toContain("main Chrome");
+      expect(instructions, engine).toContain("no 9222/9223/profile copy unless CDP requested");
+      expect(instructions, engine).not.toContain("named skill");
+    }
   });
 
   it("limits detailed Sheets bootstrap guidance to engines that need it", () => {
@@ -96,9 +106,9 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("Asia/Shanghai");
     expect(instructions).toContain("web_extract/browser");
     expect(instructions).toContain("Scrapling");
-    expect(instructions).toContain("no 9222/9223");
-    expect(instructions).toContain("user requests legacy CDP");
-    expect(instructions).toContain("cite links");
+    expect(instructions).toContain("no 9222/9223/profile copy unless CDP requested");
+    expect(instructions).toContain("No access? Report; don't switch");
+    expect(instructions).toContain("cite");
   });
 
   it("keeps background procedure only for engines that expose background workers", () => {
