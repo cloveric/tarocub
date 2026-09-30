@@ -1044,7 +1044,15 @@ export async function createDefaultLarkBridge(env: LarkRuntimeEnv): Promise<{ st
     TAROCUB_TURN_POOL_PATH: env.TAROCUB_TURN_POOL_PATH,
     TAROCUB_TELEMETRY_MODULE: env.TAROCUB_TELEMETRY_MODULE,
     LARK_CHANNEL_TELEMETRY_MODULE: env.LARK_CHANNEL_TELEMETRY_MODULE,
-  }, { transport: "lark" });
+  }, {
+    transport: "lark",
+    startupInstructions: (runtimeConfig) => larkAgentInstructions({
+      engine: runtimeConfig.engine,
+      claudeChrome: runtimeConfig.claudeChrome,
+      timezone: runtimeConfig.timezone,
+      context: "chat",
+    }),
+  });
   return {
     stateDir: config.stateDir,
     bridge,

@@ -51,6 +51,49 @@ function createZipBuffer(files: Record<string, string>): Buffer {
 }
 
 describe("lark service", () => {
+  it("synchronizes current Kimi system instructions during bridge startup", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-kimi-startup-"));
+    const stateDir = path.join(root, ".cctb", "alpha");
+    const agentPath = path.join(stateDir, "workspace", ".kimi-code", "agents", "agent.md");
+    try {
+      await mkdir(path.dirname(agentPath), { recursive: true });
+      await writeFile(path.join(stateDir, "config.json"), JSON.stringify({
+        engine: "kimi",
+        timezone: "Asia/Shanghai",
+      }) + "\n", "utf8");
+      await writeFile(agentPath, [
+        "---",
+        "name: agent",
+        "description: Project main agent",
+        "override: true",
+        "---",
+        "",
+        "${base_prompt}",
+        "",
+        "${plugin_sections}",
+        "",
+        "<!-- TaroCub Kimi system instructions: start -->",
+        "Browser: 9222/9223 only for a named skill.",
+        "<!-- TaroCub Kimi system instructions: end -->",
+        "",
+      ].join("\n"), "utf8");
+
+      const { bridge } = await createDefaultLarkBridge({
+        HOME: root,
+        TAROCUB_INSTANCE: "alpha",
+        CODEX_TELEGRAM_STATE_DIR: stateDir,
+      });
+
+      const updated = await readFile(agentPath, "utf8");
+      expect(updated).toContain("Login: named-skill profile wins (XHS search→Camoufox)");
+      expect(updated).toContain("No CDP/9222/9223");
+      expect(updated).not.toContain("9222/9223 only for a named skill");
+      await (bridge as any).adapter.destroy();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("forwards the configured DeepSeek executable and shared home through the default Lark bridge", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-deepseek-env-"));
     const stateDir = path.join(root, ".cctb", "alpha");

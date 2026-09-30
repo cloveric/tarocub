@@ -39,6 +39,13 @@ export interface ServiceDependencies {
   bridge: Bridge;
 }
 
+interface BridgeDependencyOptions {
+  transport?: "telegram" | "lark";
+  startupInstructions?: (
+    config: Awaited<ReturnType<typeof loadInstanceConfig>>,
+  ) => string | null;
+}
+
 export interface TelegramServiceContext extends TelegramDeliveryContext {
   chatQueue?: ChatQueue;
   botUsername?: string;
@@ -813,7 +820,7 @@ async function createAdapter(
   config: ReturnType<typeof resolveConfig>,
   instructionsPath: string,
   configPath: string,
-  options: { transport?: "telegram" | "lark" } = {},
+  options: BridgeDependencyOptions = {},
 ): Promise<CodexAdapter> {
   const runtimeConfig = await readInstanceRuntimeConfig(configPath);
   const engine = runtimeConfig.engine;
@@ -869,12 +876,17 @@ async function createAdapter(
   if (engine === "kimi") {
     await mkdir(workspacePath, { recursive: true });
     await linkKimiSharedSkills(env, workspacePath);
-    return new KimiAcpAdapter(config.kimiExecutable, {
+    const adapter = new KimiAcpAdapter(config.kimiExecutable, {
       childEnv,
       instructionsPath,
       configPath,
       workspacePath,
     });
+    const startupInstructions = options.startupInstructions
+      ? options.startupInstructions(await loadInstanceConfig(config.stateDir))
+      : (options.transport === "lark" ? null : telegramAgentInstructions());
+    await adapter.syncDefaultWorkspaceInstructions(startupInstructions);
+    return adapter;
   }
 
   if (engine === "deepseek") {
@@ -960,7 +972,7 @@ function deepSeekModelSelection(
 async function createBridgeDependenciesForConfig(
   env: EnvSource,
   config: ReturnType<typeof resolveConfig>,
-  options: { transport?: "telegram" | "lark" } = {},
+  options: BridgeDependencyOptions = {},
 ): Promise<{ config: ReturnType<typeof resolveConfig>; bridge: Bridge }> {
   const accessStore = new AccessStore(config.accessStatePath);
   const sessionStore = new SessionStore(config.sessionStatePath);
@@ -1000,7 +1012,7 @@ async function createBridgeDependenciesForConfig(
 
 export async function createBridgeDependencies(
   env: EnvSource,
-  options: { transport?: "telegram" | "lark" } = {},
+  options: BridgeDependencyOptions = {},
 ): Promise<{ config: ReturnType<typeof resolveConfig>; bridge: Bridge }> {
   return createBridgeDependenciesForConfig(env, resolveBridgeConfig(env), options);
 }

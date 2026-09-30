@@ -1903,6 +1903,12 @@ export class KimiAcpAdapter implements CodexAdapter {
     return { sessionId: `telegram-${chatId}` };
   }
 
+  async syncDefaultWorkspaceInstructions(bridgeInstructions: string | null): Promise<void> {
+    const agentInstructions = await this.loadInstructions();
+    const instructions = combineInstructions(agentInstructions, bridgeInstructions);
+    await this.prepareInstructions(this.workspacePath, instructions);
+  }
+
   async validateExternalSession(
     sessionId: string,
     input?: { workspaceOverride?: string },
