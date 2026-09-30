@@ -86,12 +86,15 @@ node dist/src/index.js lark service restart --instance <name>
 
 The console needs a Feishu login. Two ways:
 
-- **`agent-browser connect <cdp-port>`** — attach to the operator's already-logged-in
-  Chrome (e.g. CDP `9222`) and drive the console with their existing session. Fastest when
-  that Chrome is logged into the Feishu open platform.
+- **Claude Chrome integration** — use the operator's already-open main Chrome and its
+  existing Feishu session. This is the default for Claude instances with Chrome enabled;
+  do not relaunch Chrome, copy its profile, or attach through debug ports.
 - agent-browser's **own** managed Chrome is a fresh temp profile (NOT logged in) → it needs
   a QR scan-login first; the session is saved to `~/.cctb/feishu-console-auth.json` so a
   later run skips the scan.
+- Legacy CDP/debug-port workflows are compatibility fallbacks only. Use one only when the
+  operator explicitly requests that legacy path; never select it merely because a skill
+  happens to mention a port.
 - The scope editor in the import dialog is a **Monaco** editor: plain typing triggers
   bracket auto-close (mangles JSON), and `execCommand('insertText')` appends rather than
   replaces. The reliable way: focus the editor, select-all (Cmd+A), then dispatch a

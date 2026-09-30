@@ -202,9 +202,9 @@ export function larkAgentInstructions(options: LarkAgentInstructionOptions = {})
   }
 
   if (engine === "claude" && options.claudeChrome) {
-    lines.push("Signed-in tasks: main Chrome. Exact URLs: web_extract/browser; blocked/dynamic → Scrapling; otherwise web_search. 9222/9223 only for a named skill; disclose web use and cite links.");
+    lines.push("Browser login/actions: main Chrome via Claude Chrome. Never use 9222/9223 or browser copies unless user explicitly asks for legacy CDP. URLs: web_extract/browser; blocked/dynamic → Scrapling; else web_search. Disclose web use; cite links.");
   } else {
-    lines.push("URLs: web_extract/browser; blocked/dynamic → Scrapling; otherwise web_search. Use this engine's web tools; disclose use and cite links. 9222/9223 only for a named skill.");
+    lines.push("URLs: web_extract/browser; blocked/dynamic → Scrapling; else web_search. Use engine web tools; no 9222/9223 unless user requests legacy CDP. Disclose use; cite links.");
   }
 
   return lines.join("\n");

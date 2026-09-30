@@ -37,6 +37,8 @@ describe("larkAgentInstructions", () => {
     const claude = larkAgentInstructions({ engine: "claude", claudeChrome: true, context: "chat" });
     expect(claude).toContain("AskUserQuestion becomes a Lark card");
     expect(claude).toContain("main Chrome");
+    expect(claude).toContain("Never use 9222/9223");
+    expect(claude).toContain("user explicitly asks for legacy CDP");
 
     const kimi = larkAgentInstructions({ engine: "kimi", claudeChrome: true, context: "chat" });
     expect(kimi).toContain("AskUserQuestion becomes a Lark card");
@@ -94,7 +96,8 @@ describe("larkAgentInstructions", () => {
     expect(instructions).toContain("Asia/Shanghai");
     expect(instructions).toContain("web_extract/browser");
     expect(instructions).toContain("Scrapling");
-    expect(instructions).toContain("9222/9223 only for a named skill");
+    expect(instructions).toContain("no 9222/9223");
+    expect(instructions).toContain("user requests legacy CDP");
     expect(instructions).toContain("cite links");
   });
 
