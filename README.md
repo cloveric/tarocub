@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/github-banner.png" alt="TaroCub: Feishu/Lark-first control for local AI agents" width="100%" />
+  <img src="./assets/tarocub-banner.jpg" alt="TaroCub: your own AI bot, living in Feishu/Lark, running on your own machine" width="100%" />
 </p>
 
 <p align="center">
@@ -19,9 +19,10 @@
 <h1 align="center">TaroCub</h1>
 
 <p align="center">
-  <strong>A Feishu/Lark-first gateway for Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity running on your own machine.</strong><br>
-  TaroCub runs real CLI agents on your own machine, then gives them durable chat surfaces, files, sessions, tasks, cron, audit logs, and multi-agent workflows.<br>
-  Resume local sessions anytime from your phone, whether you are at your desk, commuting, or walking the dog.
+  <strong>The local-first personal AI bot: your own AI bot, living in Feishu/Lark, running on your own machine.</strong><br>
+  Each TaroCub bot is a real Codex, Claude Code, Kimi Code, DeepSeek Harness, or Antigravity agent running locally, with a Feishu identity of its own.<br>
+  Message it like a teammate: send voice notes, files, and screenshots; get back documents, images, and finished work.<br>
+  Your computer is the brain. Feishu is the face. Mix engines freely and run as many bots as you want, with no per-bot fee.
 </p>
 
 <p align="center">
@@ -37,11 +38,40 @@
 
 ## What This Is
 
-`TaroCub` is a local bridge, not a hosted agent product. It runs the real Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity CLIs on your own computer, then gives them a durable messaging control surface in Feishu/Lark, with Telegram retained as an optional compatibility channel.
+`TaroCub` turns the coding agents already on your computer into personal bots you talk to in Feishu/Lark. It is not a hosted agent product: every bot runs the real Codex, Claude Code, Kimi Code, DeepSeek Harness, or Antigravity CLI on your own machine, with your files, tools, and logins. TaroCub gives each one a durable chat identity: sessions you can resume from your phone, two-way file delivery, voice transcription, scheduled tasks, multi-bot routing, and audit logs. Telegram is retained as an optional compatibility channel.
 
 > **Feishu/Lark is the primary platform.** The maintainer has not used Telegram as a day-to-day control surface for a long time. Telegram remains available for existing deployments, but new installations should start with Feishu/Lark.
 
 This project was formerly named `cc-telegram-bridge`. The canonical repository is now `cloveric/tarocub`; GitHub redirects the old URL, and existing state directories plus the `cctb` shorthand remain supported for compatibility.
+
+### Cloud bots vs. TaroCub
+
+| | Cloud personal AI bots | TaroCub |
+|---|---|---|
+| Where it runs | The vendor's servers | Your own computer |
+| Your files and data | Uploaded to the vendor | Stay on your machine |
+| Models | Usually one vendor's own model | Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity side by side; pick one engine per bot |
+| How many bots | Usually one free bot; more bots or features need a subscription | As many as you like, one Feishu app per bot. TaroCub is MIT-licensed and charges nothing per bot; you only use the model plans you already have |
+| What it can do | Whatever the vendor exposes | Anything your machine can do: local tools, scripts, and logged-in accounts |
+| Where you chat | The vendor's own app | Feishu/Lark, with Telegram optional |
+
+### Meet the crew
+
+The lion cub is TaroCub's mascot. Give every bot its own face: these hand-drawn avatars are transparent 512×512 PNGs in [`assets/avatars/`](./assets/avatars/) and work well as Feishu app icons.
+
+<table align="center">
+  <tr>
+    <td align="center"><img src="./assets/avatars/lion.png" width="80" alt="Lion"><br><sub>Lion</sub></td>
+    <td align="center"><img src="./assets/avatars/fox.png" width="80" alt="Fox"><br><sub>Fox</sub></td>
+    <td align="center"><img src="./assets/avatars/raccoon.png" width="80" alt="Raccoon"><br><sub>Raccoon</sub></td>
+    <td align="center"><img src="./assets/avatars/panda.png" width="80" alt="Panda"><br><sub>Panda</sub></td>
+    <td align="center"><img src="./assets/avatars/rabbit.png" width="80" alt="Rabbit"><br><sub>Rabbit</sub></td>
+    <td align="center"><img src="./assets/avatars/cat.png" width="80" alt="Cat"><br><sub>Cat</sub></td>
+    <td align="center"><img src="./assets/avatars/tiger.png" width="80" alt="Tiger"><br><sub>Tiger</sub></td>
+    <td align="center"><img src="./assets/avatars/bear.png" width="80" alt="Taro Bear"><br><sub>Taro Bear</sub></td>
+    <td align="center"><img src="./assets/avatars/penguin.png" width="80" alt="Penguin"><br><sub>Penguin</sub></td>
+  </tr>
+</table>
 
 It is built for people who already use CLI agents heavily and want:
 

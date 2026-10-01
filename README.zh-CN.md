@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img src="./assets/github-banner.png" alt="TaroCub" width="100%" />
+  <img src="./assets/tarocub-banner.jpg" alt="TaroCub：跑在你自己电脑上的飞书专属 AI bot" width="100%" />
 </p>
 
 <p align="center">
@@ -18,8 +18,8 @@
 </p>
 
 <h3 align="center">
-  TaroCub：飞书/Lark-first 的本地 AI agent 网关，支持 Codex、Claude Code、Kimi Code、DeepSeek Harness 和 Antigravity。<br>
-  在手机上续接电脑会话、双向传文件、跑定时任务、调度多个 agent worker，也可以把同一套 bridge 暴露到团队聊天里。
+  TaroCub：本地优先的个人 AI bot，跑在你自己电脑上的飞书专属 bot。<br>
+  每个 bot 背后都是你本机真实运行的 Codex、Claude Code、Kimi Code、DeepSeek Harness 或 Antigravity。在飞书里发语音、发文件、派任务，它像同事一样回你文档、图片和做完的活；多种模型随意搭配，bot 想开几个开几个，不按 bot 收费。
 </h3>
 
 <p align="center">
@@ -29,11 +29,40 @@
 
 ## 先从这里开始
 
-**TaroCub 不是又一个托管式 agent UI。** 它在你的机器上运行真正的 Codex、Claude Code、Kimi Code、DeepSeek Harness 和 Antigravity CLI，然后给它们补上飞书/Lark 主入口、访问控制、文件投递、语音转写、定时任务、会话续接、多 bot 路由和可审计的长任务状态；Telegram 作为可选兼容通道保留。
+**TaroCub 把你电脑上的 AI agent 变成你在飞书里的专属 bot。** 它不是托管服务：每个 bot 都在你自己的机器上运行真正的 Codex、Claude Code、Kimi Code、DeepSeek Harness 或 Antigravity CLI，用的是你的文件、工具和登录状态。TaroCub 负责给它一个飞书身份，并补上访问控制、会话续接、双向传文件、语音转写、定时任务、多 bot 路由和可审计的长任务状态；Telegram 作为可选兼容通道保留。
 
 > **主平台已经是飞书/Lark。** 维护者本人已经很久不把 Telegram 当作日常控制面使用。Telegram 仍可用于已有部署，但新安装建议直接从飞书/Lark 开始。
 
 这个项目原名 `cc-telegram-bridge`。现在的规范仓库是 `cloveric/tarocub`；GitHub 会把旧 URL 重定向过来，已有状态目录和 `cctb` 简写也会继续作为兼容层保留。
+
+### 云端 bot 与 TaroCub
+
+| | 云端个人 AI bot | TaroCub |
+|---|---|---|
+| 跑在哪里 | 厂商的服务器 | 你自己的电脑 |
+| 你的文件和数据 | 要上传到厂商那里 | 留在本机 |
+| 用什么模型 | 通常只能用厂商自家的一种模型 | Codex、Claude Code、Kimi Code、DeepSeek Harness、Antigravity 同时可用，每个 bot 各配一个引擎 |
+| 能开几个 bot | 通常一个免费，多开或高级功能要订阅付费 | 想开几个开几个，每个飞书应用就是一个 bot；TaroCub 采用 MIT 协议开源免费，不按 bot 收费，只需用你已有的模型额度 |
+| 能做什么 | 厂商开放什么就做什么 | 你的电脑能做什么它就能做什么：本地工具、脚本和已登录的账号 |
+| 在哪里聊 | 厂商自己的 App | 飞书/Lark，Telegram 可选 |
+
+### 认识一下这群 bot
+
+小狮子是 TaroCub 的吉祥物。给每个 bot 配一张自己的脸：这些手绘头像都是 512×512 的透明 PNG，放在 [`assets/avatars/`](./assets/avatars/)，可以直接用作飞书应用图标。
+
+<table align="center">
+  <tr>
+    <td align="center"><img src="./assets/avatars/lion.png" width="80" alt="Lion"><br><sub>狮子</sub></td>
+    <td align="center"><img src="./assets/avatars/fox.png" width="80" alt="Fox"><br><sub>狐狸</sub></td>
+    <td align="center"><img src="./assets/avatars/raccoon.png" width="80" alt="Raccoon"><br><sub>浣熊</sub></td>
+    <td align="center"><img src="./assets/avatars/panda.png" width="80" alt="Panda"><br><sub>熊猫</sub></td>
+    <td align="center"><img src="./assets/avatars/rabbit.png" width="80" alt="Rabbit"><br><sub>兔子</sub></td>
+    <td align="center"><img src="./assets/avatars/cat.png" width="80" alt="Cat"><br><sub>猫</sub></td>
+    <td align="center"><img src="./assets/avatars/tiger.png" width="80" alt="Tiger"><br><sub>老虎</sub></td>
+    <td align="center"><img src="./assets/avatars/bear.png" width="80" alt="Taro Bear"><br><sub>芋头熊</sub></td>
+    <td align="center"><img src="./assets/avatars/penguin.png" width="80" alt="Penguin"><br><sub>企鹅</sub></td>
+  </tr>
+</table>
 
 最简单的安装方式：克隆仓库，用 Codex、Claude Code、Kimi Code、DeepSeek Harness 或 Antigravity 打开它，然后直接对 agent 说：*“读一下 README，帮我配置飞书/Lark bot；运行 Lark setup、检查权限并告诉我需要扫码或确认什么。”* 这个项目本来就是给 CLI agent 自己安装和运维的。
 
