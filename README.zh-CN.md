@@ -18,7 +18,8 @@
 </p>
 
 <h3 align="center">
-  TaroCub：本地优先的个人 AI bot，跑在你自己电脑上的飞书专属 bot。<br>
+  TaroCub：像 Grok Bot、OpenAI dots、Meta Muse 一样 24 小时在线的个人 AI bot，但跑在你自己的电脑上、住在飞书里。<br>
+  它们给每个 agent 配一台云端电脑，TaroCub 用的是你自己的电脑。<br>
   每个 bot 背后都是你本机真实运行的 Codex、Claude Code、Kimi Code、DeepSeek Harness 或 Antigravity。在飞书里发语音、发文件、派任务，它像同事一样回你文档、图片和做完的活；多种模型随意搭配，bot 想开几个开几个，不按 bot 收费。
 </h3>
 
@@ -35,16 +36,18 @@
 
 这个项目原名 `cc-telegram-bridge`。现在的规范仓库是 `cloveric/tarocub`；GitHub 会把旧 URL 重定向过来，已有状态目录和 `cctb` 简写也会继续作为兼容层保留。
 
-### 云端 bot 与 TaroCub
+### Grok Bot、OpenAI dots、Meta Muse 与 TaroCub
 
-| | 云端个人 AI bot | TaroCub |
+| | 云端 agent：Grok Bot、OpenAI dots、Meta Muse | TaroCub |
 |---|---|---|
-| 跑在哪里 | 厂商的服务器 | 你自己的电脑 |
+| 跑在哪里 | 厂商的云端电脑 | 你自己的电脑 |
 | 你的文件和数据 | 要上传到厂商那里 | 留在本机 |
-| 用什么模型 | 通常只能用厂商自家的一种模型 | Codex、Claude Code、Kimi Code、DeepSeek Harness、Antigravity 同时可用，每个 bot 各配一个引擎 |
-| 能开几个 bot | 通常一个免费，多开或高级功能要订阅付费 | 想开几个开几个，每个飞书应用就是一个 bot；TaroCub 采用 MIT 协议开源免费，不按 bot 收费，只需用你已有的模型额度 |
+| 用什么模型 | 厂商自家的模型 | Codex、Claude Code、Kimi Code、DeepSeek Harness、Antigravity 同时可用，每个 bot 各配一个引擎 |
+| 能开几个 bot | 跟着厂商的订阅套餐走 | 想开几个开几个，每个飞书应用就是一个 bot；TaroCub 采用 MIT 协议开源免费，不按 bot 收费，只需用你已有的模型额度 |
 | 能做什么 | 厂商开放什么就做什么 | 你的电脑能做什么它就能做什么：本地工具、脚本和已登录的账号 |
 | 在哪里聊 | 厂商自己的 App | 飞书/Lark，Telegram 可选 |
+
+<sub>Grok Bot、dots、Muse 分别是 SpaceXAI（xAI）、OpenAI 和 Meta 的产品。TaroCub 是独立的开源项目，与它们没有任何关联，也未获得其背书。</sub>
 
 ### 认识一下这群 bot
 

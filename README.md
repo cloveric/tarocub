@@ -19,10 +19,11 @@
 <h1 align="center">TaroCub</h1>
 
 <p align="center">
-  <strong>The local-first personal AI bot: your own AI bot, living in Feishu/Lark, running on your own machine.</strong><br>
+  <strong>Always-on personal AI bots like Grok Bot, OpenAI dots, and Meta Muse, but running on your own machine and living in Feishu/Lark.</strong><br>
+  They give every agent its own cloud computer. TaroCub gives it yours.<br>
   Each TaroCub bot is a real Codex, Claude Code, Kimi Code, DeepSeek Harness, or Antigravity agent running locally, with a Feishu identity of its own.<br>
   Message it like a teammate: send voice notes, files, and screenshots; get back documents, images, and finished work.<br>
-  Your computer is the brain. Feishu is the face. Mix engines freely and run as many bots as you want, with no per-bot fee.
+  Feishu is the face. Mix engines freely and run as many bots as you want, with no per-bot fee.
 </p>
 
 <p align="center">
@@ -44,16 +45,18 @@
 
 This project was formerly named `cc-telegram-bridge`. The canonical repository is now `cloveric/tarocub`; GitHub redirects the old URL, and existing state directories plus the `cctb` shorthand remain supported for compatibility.
 
-### Cloud bots vs. TaroCub
+### Grok Bot, OpenAI dots, Meta Muse vs. TaroCub
 
-| | Cloud personal AI bots | TaroCub |
+| | Cloud agents: Grok Bot, OpenAI dots, Meta Muse | TaroCub |
 |---|---|---|
-| Where it runs | The vendor's servers | Your own computer |
+| Where it runs | The vendor's cloud computer | Your own computer |
 | Your files and data | Uploaded to the vendor | Stay on your machine |
-| Models | Usually one vendor's own model | Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity side by side; pick one engine per bot |
-| How many bots | Usually one free bot; more bots or features need a subscription | As many as you like, one Feishu app per bot. TaroCub is MIT-licensed and charges nothing per bot; you only use the model plans you already have |
+| Models | The vendor's own models | Codex, Claude Code, Kimi Code, DeepSeek Harness, and Antigravity side by side; pick one engine per bot |
+| How many bots | Tied to the vendor's subscription plans | As many as you like, one Feishu app per bot. TaroCub is MIT-licensed and charges nothing per bot; you only use the model plans you already have |
 | What it can do | Whatever the vendor exposes | Anything your machine can do: local tools, scripts, and logged-in accounts |
 | Where you chat | The vendor's own app | Feishu/Lark, with Telegram optional |
+
+<sub>Grok Bot, dots, and Muse are products of SpaceXAI (xAI), OpenAI, and Meta. TaroCub is an independent open-source project and is not affiliated with or endorsed by them.</sub>
 
 ### Meet the crew
 
