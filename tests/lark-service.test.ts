@@ -41,6 +41,7 @@ import { AccessStore } from "../src/state/access-store.js";
 import { parseTimelineEvents } from "../src/state/timeline-log.js";
 import { UsageStore } from "../src/state/usage-store.js";
 import { loadInstanceConfig } from "../src/telegram/instance-config.js";
+import { PartialMediaTranscriptionError } from "../src/runtime/media-transcript.js";
 
 function createZipBuffer(files: Record<string, string>): Buffer {
   const zip = new AdmZip();
@@ -2758,6 +2759,49 @@ describe("lark service", () => {
         expect.stringContaining("clip.mp4"),
       ]));
       expectLarkFinalAnswer(channel, "done");
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes an incomplete Lark transcript to the engine with an explicit gap warning", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "cctb-lark-asr-partial-"));
+    const transcribeMedia = vi.fn(async () => {
+      throw new PartialMediaTranscriptionError("first part\nthird part", [2], 3);
+    });
+    const channel = fakeChannel({
+      downloadResource: vi.fn(async () => Buffer.from("audio")),
+    });
+    const bridge = {
+      checkAccess: vi.fn(async () => ({ kind: "allow" as const })),
+      handleAuthorizedMessage: vi.fn(async (_input: { text: string; files: string[] }) => ({ text: "done" })),
+    };
+
+    try {
+      await handleLarkMessage({
+        channel,
+        bridge,
+        runtime: createLarkServiceRuntime({ transcribeMedia }),
+        stateDir,
+        message: fakeLarkMessage({
+          messageId: "om_partial_audio",
+          content: "总结录音",
+          resources: [{ type: "audio", fileKey: "audio_key", fileName: "meeting.m4a" }],
+        }),
+      });
+
+      expect(bridge.handleAuthorizedMessage).toHaveBeenCalledTimes(1);
+      const bridgeInput = bridge.handleAuthorizedMessage.mock.calls[0]![0];
+      expect(bridgeInput.text).toContain("[Bridge media transcription partial]");
+      expect(bridgeInput.text).toContain("missing audio chunk(s): 2/3");
+      expect(bridgeInput.text).toContain("first part\nthird part");
+      expect(bridgeInput.text).not.toContain("[Bridge media transcription completed]");
+      const timeline = parseTimelineEvents(await readFile(path.join(stateDir, "timeline.log.jsonl"), "utf8"));
+      expect(timeline).toContainEqual(expect.objectContaining({
+        type: "file.accepted",
+        outcome: "partial",
+        metadata: expect.objectContaining({ failedChunkNumbers: [2], totalChunks: 3 }),
+      }));
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }

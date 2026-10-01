@@ -233,7 +233,8 @@ describe("dynamic Lark media instructions", () => {
     try {
       expect(localAsrAgentInstruction()).toBeUndefined();
       expect(cloudAsrAgentInstruction()).toContain("Aliyun Tingwu cloud");
-      expect(larkMediaTaskInstruction("总结这个 podcast")).toContain("auto-transcribed");
+      expect(larkMediaTaskInstruction("总结这个 podcast")).toContain("Inbound audio is auto-transcribed");
+      expect(larkMediaTaskInstruction("总结这个 podcast")).toContain("longer or unprobeable videos are attached directly");
     } finally {
       restoreEnv("ASR_HTTP_URL", previousHttp);
       restoreEnv("ASR_CLI_PYTHON", previousCli);

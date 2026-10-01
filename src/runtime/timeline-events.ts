@@ -1,6 +1,17 @@
 import type { EngineStreamEvent } from "../codex/adapter.js";
 import { appendTimelineEvent } from "../state/timeline-log.js";
 
+/**
+ * Persist semantic milestones, not token-level rendering noise. Live cards and
+ * delivery handlers still receive every event; only the diagnostic timeline is
+ * compacted so a single verbose turn cannot rotate away useful history.
+ */
+export function shouldPersistEngineTimelineEvent(event: EngineStreamEvent): boolean {
+  if (event.type === "thinking" || event.type === "tool_progress") return false;
+  if (event.type === "assistant_text" && event.delta === true) return false;
+  return true;
+}
+
 export function engineEventTimelineMetadata(event: EngineStreamEvent): {
   toolName: string | undefined;
   textChars: number | undefined;

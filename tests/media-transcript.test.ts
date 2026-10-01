@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER,
+  BRIDGE_MEDIA_TRANSCRIPT_PARTIAL_MARKER,
   formatBridgeMediaTranscript,
+  formatBridgePartialMediaTranscript,
 } from "../src/runtime/media-transcript.js";
 
 describe("bridge media transcript block", () => {
@@ -38,5 +40,14 @@ describe("bridge media transcript block", () => {
     const fileLine = block.split("\n")[1]!;
     expect(fileLine.startsWith("File: ")).toBe(true);
     expect(fileLine).not.toContain("\n");
+  });
+
+  it("marks preserved speech as incomplete when ASR chunks are missing", () => {
+    const block = formatBridgePartialMediaTranscript("meeting.m4a", "first\nthird", [3, 2, 2], 4);
+
+    expect(block).toContain(BRIDGE_MEDIA_TRANSCRIPT_PARTIAL_MARKER);
+    expect(block).toContain("missing audio chunk(s): 2/4, 3/4");
+    expect(block).toContain("first\nthird");
+    expect(block).not.toContain(BRIDGE_MEDIA_TRANSCRIPT_COMPLETED_MARKER);
   });
 });

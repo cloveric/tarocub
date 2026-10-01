@@ -7,7 +7,7 @@ import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridg
 import type { ChatQueueWaitEvent } from "../runtime/chat-queue.js";
 import type { BridgeTurnLockWaitEvent } from "../runtime/turn-lock.js";
 import type { TurnPoolWaitEvent } from "../runtime/turn-pool.js";
-import { engineEventTimelineMetadata } from "../runtime/timeline-events.js";
+import { engineEventTimelineMetadata, shouldPersistEngineTimelineEvent } from "../runtime/timeline-events.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import {
   hasConversationResume,
@@ -91,7 +91,11 @@ import {
   hasTranscribableMediaExtension,
   hasTranscribableVideoExtension,
 } from "../runtime/media-extensions.js";
-import { formatBridgeMediaTranscript } from "../runtime/media-transcript.js";
+import {
+  formatBridgeMediaTranscript,
+  formatBridgePartialMediaTranscript,
+  isPartialMediaTranscriptionError,
+} from "../runtime/media-transcript.js";
 import {
   formatPreparedVideoInput,
   prepareVideoInput,
@@ -1761,6 +1765,30 @@ async function runNormalizedLarkMessage(
             if (isCloudAsrCancelledError(error) || runController.signal.aborted) {
               throw error;
             }
+            if (isPartialMediaTranscriptionError(error)) {
+              const transcriptBlock = formatBridgePartialMediaTranscript(
+                media.attachment.fileName ?? path.basename(media.localPath),
+                error.transcript,
+                error.failedChunkNumbers,
+                error.totalChunks,
+              );
+              requestText = requestText.trim()
+                ? `${requestText.trim()}\n${transcriptBlock}`
+                : transcriptBlock;
+              await appendLarkTimelineEvent(input.stateDir, normalized, {
+                type: "file.accepted",
+                outcome: "partial",
+                detail: "media transcription incomplete; partial transcript preserved",
+                metadata: {
+                  fileName: media.attachment.fileName,
+                  kind: media.attachment.kind,
+                  failedChunkNumbers: error.failedChunkNumbers,
+                  totalChunks: error.totalChunks,
+                  phase: "prepare",
+                },
+              });
+              continue;
+            }
             // A video always has a usable fallback: extracted frames for a
             // short clip, or the original local path for a long/unprobeable
             // one. Silent clips and ASR outages must not prevent the model from
@@ -2014,11 +2042,13 @@ async function runNormalizedLarkMessage(
         ) {
           await runCard?.apply(event);
         }
-        await appendLarkTimelineEvent(input.stateDir, normalized, {
-          type: "engine.event",
-          detail: event.type,
-          metadata: engineEventTimelineMetadata(event),
-        });
+        if (shouldPersistEngineTimelineEvent(event)) {
+          await appendLarkTimelineEvent(input.stateDir, normalized, {
+            type: "engine.event",
+            detail: event.type,
+            metadata: engineEventTimelineMetadata(event),
+          });
+        }
 
         if (event.type === "user_input_request") {
           try {
@@ -2188,14 +2218,16 @@ async function runNormalizedLarkMessage(
           // post-turn guard inspects the complete answer. Keep only answer text
           // off the card here; tools, thinking, errors, and tasks still flow.
           if (event.type === "assistant_text" || event.type === "result") {
-            await appendLarkTimelineEvent(input.stateDir, normalized, {
-              type: "engine.event",
-              detail: event.type,
-              metadata: {
-                ...engineEventTimelineMetadata(event),
-                suppressedBy: "delivery-followup-guard",
-              },
-            });
+            if (shouldPersistEngineTimelineEvent(event)) {
+              await appendLarkTimelineEvent(input.stateDir, normalized, {
+                type: "engine.event",
+                detail: event.type,
+                metadata: {
+                  ...engineEventTimelineMetadata(event),
+                  suppressedBy: "delivery-followup-guard",
+                },
+              });
+            }
             return;
           }
         }

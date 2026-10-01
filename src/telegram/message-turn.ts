@@ -9,7 +9,7 @@ import {
   pruneStaleCctbSendDirs as defaultPruneStaleCctbSendDirs,
   resolveCctbSendDir,
 } from "../runtime/telegram-out.js";
-import { appendTimelineEventBestEffort } from "../runtime/timeline-events.js";
+import { appendTimelineEventBestEffort, shouldPersistEngineTimelineEvent } from "../runtime/timeline-events.js";
 import { isCredentialStylePath } from "../runtime/credential-files.js";
 import { renderBackgroundTaskHeader } from "../runtime/background-task-header.js";
 import {
@@ -549,26 +549,28 @@ export async function executeWorkflowAwareTelegramTurn(input: {
   };
   const handleEngineEvent = (event: EngineStreamEvent): void => {
     void Promise.resolve(context.onTurnActivity?.()).catch(() => {});
-    void appendTimelineEventBestEffort(stateDir, {
-      type: "engine.event",
-      instanceName: context.instanceName,
-      channel: "telegram",
-      chatId: normalized.chatId,
-      ...logScope,
-      userId: normalized.userId,
-      updateId: context.updateId,
-      detail: event.type,
-      metadata: {
-        toolName: "toolName" in event ? event.toolName : undefined,
-        textChars: "text" in event ? event.text.length : undefined,
-        status: "status" in event ? event.status : undefined,
-        taskId: "taskId" in event ? event.taskId : undefined,
-        userDeliverySuppressed: event.type === "task_notification"
-          ? event.suppressUserDelivery
-          : undefined,
-        hasSendFileTag: event.type === "assistant_text" ? hasSendFileTag(event.text) : undefined,
-      },
-    });
+    if (shouldPersistEngineTimelineEvent(event)) {
+      void appendTimelineEventBestEffort(stateDir, {
+        type: "engine.event",
+        instanceName: context.instanceName,
+        channel: "telegram",
+        chatId: normalized.chatId,
+        ...logScope,
+        userId: normalized.userId,
+        updateId: context.updateId,
+        detail: event.type,
+        metadata: {
+          toolName: "toolName" in event ? event.toolName : undefined,
+          textChars: "text" in event ? event.text.length : undefined,
+          status: "status" in event ? event.status : undefined,
+          taskId: "taskId" in event ? event.taskId : undefined,
+          userDeliverySuppressed: event.type === "task_notification"
+            ? event.suppressUserDelivery
+            : undefined,
+          hasSendFileTag: event.type === "assistant_text" ? hasSendFileTag(event.text) : undefined,
+        },
+      });
+    }
 
     if (event.type === "task_notification" && !event.settlesCurrentTurn && !event.suppressUserDelivery) {
       const notificationText = isWholeResponseFileBlockText(event.text)

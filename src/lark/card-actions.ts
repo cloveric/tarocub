@@ -11,7 +11,11 @@ import { checkBudgetAvailability, recordBridgeTurnUsage } from "../runtime/bridg
 import { resolveConversationResume } from "../runtime/conversation-resume.js";
 import { prepareArchiveContinueWorkflow } from "../runtime/file-workflow.js";
 import { scanRecentAntigravityConversations, scanRecentClaudeSessions } from "../runtime/session-scanner.js";
-import { appendTimelineEventBestEffort, engineEventTimelineMetadata } from "../runtime/timeline-events.js";
+import {
+  appendTimelineEventBestEffort,
+  engineEventTimelineMetadata,
+  shouldPersistEngineTimelineEvent,
+} from "../runtime/timeline-events.js";
 import { FileWorkflowStore } from "../state/file-workflow-store.js";
 import { SessionStore } from "../state/session-store.js";
 import { TELEGRAM_APPROVAL_TIMEOUT_MS } from "../telegram/approval-timeouts.js";
@@ -2243,12 +2247,14 @@ async function runLarkCardChoice(input: {
       action: "choice",
     });
     const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
-      await appendLarkCardActionEngineEvent(input, {
-        type: "engine.event",
-        action: "choice",
-        detail: event.type,
-        metadata: engineEventTimelineMetadata(event),
-      });
+      if (shouldPersistEngineTimelineEvent(event)) {
+        await appendLarkCardActionEngineEvent(input, {
+          type: "engine.event",
+          action: "choice",
+          detail: event.type,
+          metadata: engineEventTimelineMetadata(event),
+        });
+      }
 
       if (event.type !== "task_notification" || event.settlesCurrentTurn || event.suppressUserDelivery) {
         return;
@@ -2466,16 +2472,18 @@ async function runLarkArchiveContinueCardAction(input: {
       },
     });
     const handleEngineEvent = async (event: EngineStreamEvent): Promise<void> => {
-      await appendLarkCardActionEngineEvent(input, {
-        type: "engine.event",
-        action: "continue_archive",
-        detail: event.type,
-        metadata: {
-          uploadId: input.uploadId,
-          workflowRecordId: workflowResult.workflowRecordId,
-          ...engineEventTimelineMetadata(event),
-        },
-      });
+      if (shouldPersistEngineTimelineEvent(event)) {
+        await appendLarkCardActionEngineEvent(input, {
+          type: "engine.event",
+          action: "continue_archive",
+          detail: event.type,
+          metadata: {
+            uploadId: input.uploadId,
+            workflowRecordId: workflowResult.workflowRecordId,
+            ...engineEventTimelineMetadata(event),
+          },
+        });
+      }
 
       if (event.type !== "task_notification" || event.settlesCurrentTurn || event.suppressUserDelivery) {
         return;

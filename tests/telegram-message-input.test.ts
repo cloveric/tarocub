@@ -12,6 +12,7 @@ import {
   TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES,
 } from "../src/telegram/message-input.js";
 import { CloudAsrCancelledError } from "../src/runtime/asr-cloud.js";
+import { PartialMediaTranscriptionError } from "../src/runtime/media-transcript.js";
 import type { NormalizedTelegramMessage } from "../src/telegram/update-normalizer.js";
 
 function createNormalizedMessage(
@@ -94,6 +95,35 @@ describe("prepareTelegramMessageInput", () => {
         kind: "reply",
         text: "Voice transcription failed. Please send a text message.",
       });
+    } finally {
+      await removeTempRoot(root);
+    }
+  });
+
+  it("preserves partial speech with an explicit missing-chunk warning", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
+    const normalized = createNormalizedMessage("summarize", [{ fileId: "voice-1", kind: "voice" }]);
+
+    try {
+      const result = await prepareTelegramMessageInput({
+        locale: "en",
+        inboxDir: path.join(root, "inbox"),
+        normalized,
+        api: {
+          getFile: vi.fn().mockResolvedValue({ file_path: "voice/message.ogg" }),
+          downloadFile: vi.fn().mockResolvedValue(undefined),
+        } as never,
+        transcribeVoice: vi.fn().mockRejectedValue(
+          new PartialMediaTranscriptionError("first part\nthird part", [2], 3),
+        ),
+      });
+
+      expect(result.kind).toBe("ready");
+      const text = result.kind === "ready" ? result.text : "";
+      expect(text).toContain("[Bridge media transcription partial]");
+      expect(text).toContain("missing audio chunk(s): 2/3");
+      expect(text).toContain("first part\nthird part");
+      expect(text).not.toContain("[Bridge media transcription completed]");
     } finally {
       await removeTempRoot(root);
     }
@@ -556,6 +586,7 @@ describe("createDefaultTranscribeVoice", () => {
       ffmpegPath: "ffmpeg",
       chunkAfterSeconds: 300,
       chunkSeconds: 120,
+      env: {},
     } as never);
 
     await expect(transcribeVoice("/tmp/long-meeting.m4a")).resolves.toBe("chunk-000 transcript\nchunk-001 transcript");
@@ -567,7 +598,7 @@ describe("createDefaultTranscribeVoice", () => {
     expect(secondBody.path).toMatch(/chunk-001\.wav$/);
   });
 
-  it("keeps partial long-audio transcripts when a chunk fails", async () => {
+  it("reports partial long-audio transcripts when a chunk fails", async () => {
     const watchdog = {
       recordSuccess: vi.fn(),
       recordFailure: vi.fn().mockResolvedValue(undefined),
@@ -624,16 +655,144 @@ describe("createDefaultTranscribeVoice", () => {
       ffmpegPath: "ffmpeg",
       chunkAfterSeconds: 300,
       chunkSeconds: 120,
+      env: {},
     } as never);
 
-    const transcript = await transcribeVoice("/tmp/long-meeting.m4a");
+    let failure: unknown;
+    try {
+      await transcribeVoice("/tmp/long-meeting.m4a");
+    } catch (error) {
+      failure = error;
+    }
 
-    // Successful chunks are kept; the per-chunk failure marker is NOT blended
-    // into the transcript (it is an infra error, not user speech).
-    expect(transcript).toContain("chunk-000 transcript");
-    expect(transcript).toContain("chunk-002 transcript");
-    expect(transcript).not.toContain("transcription failed");
-    expect(transcript).not.toContain("chunk 2/3");
+    expect(failure).toBeInstanceOf(PartialMediaTranscriptionError);
+    expect(failure).toMatchObject({
+      transcript: expect.stringContaining("chunk-000 transcript"),
+      failedChunkNumbers: [2],
+      totalChunks: 3,
+    });
+    expect((failure as PartialMediaTranscriptionError).transcript).toContain("chunk-002 transcript");
+    expect((failure as PartialMediaTranscriptionError).transcript).not.toContain("transcription failed");
+  });
+
+  it("retries a temporarily unavailable HTTP ASR before using CLI fallback", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, text: async () => "" })
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce({ ok: true, status: 200, text: async () => "recovered transcript" });
+    const execFileImpl = vi.fn((
+      file: string,
+      _args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        callback(null, "30\n", "");
+        return;
+      }
+      callback(new Error(`unexpected CLI fallback: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "/tmp/qwen-python",
+      cliScript: "/tmp/qwen-transcribe.py",
+      fetchImpl: fetchImpl as never,
+      execFileImpl,
+      ffprobePath: "ffprobe",
+      httpRetryWindowMs: 100,
+      httpRetryDelayMs: 1,
+    } as never);
+
+    await expect(transcribeVoice("/tmp/voice.ogg")).resolves.toBe("recovered transcript");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(execFileImpl).not.toHaveBeenCalledWith(
+      "/tmp/qwen-python",
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it("does not retry a non-transient HTTP ASR rejection", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 400, text: async () => "" });
+    const execFileImpl = vi.fn((
+      file: string,
+      _args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        callback(null, "30\n", "");
+        return;
+      }
+      if (file === "/tmp/qwen-python") {
+        callback(null, "CLI fallback transcript", "");
+        return;
+      }
+      callback(new Error(`unexpected command: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "/tmp/qwen-python",
+      cliScript: "/tmp/qwen-transcribe.py",
+      fetchImpl: fetchImpl as never,
+      execFileImpl,
+      ffprobePath: "ffprobe",
+      httpRetryWindowMs: 100,
+      httpRetryDelayMs: 1,
+    } as never);
+
+    await expect(transcribeVoice("/tmp/voice.ogg")).resolves.toBe("CLI fallback transcript");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("chunks long audio before invoking the CLI fallback", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 503, text: async () => "" });
+    const execFileImpl = vi.fn((
+      file: string,
+      args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      if (file === "ffprobe") {
+        callback(null, "90\n", "");
+        return;
+      }
+      if (file === "ffmpeg") {
+        const pattern = String(args.at(-1));
+        void Promise.all([
+          writeFile(pattern.replace("%03d", "000"), "chunk-000"),
+          writeFile(pattern.replace("%03d", "001"), "chunk-001"),
+        ]).then(
+          () => callback(null, "", ""),
+          (error) => callback(error, "", String(error)),
+        );
+        return;
+      }
+      if (file === "/tmp/qwen-python") {
+        callback(null, `${path.basename(String(args[1]))} transcript`, "");
+        return;
+      }
+      callback(new Error(`unexpected command: ${file}`), "", "");
+    });
+    const transcribeVoice = createDefaultTranscribeVoice({
+      httpUrl: "http://127.0.0.1:8412/transcribe",
+      cliPython: "/tmp/qwen-python",
+      cliScript: "/tmp/qwen-transcribe.py",
+      fetchImpl: fetchImpl as never,
+      execFileImpl,
+      ffprobePath: "ffprobe",
+      ffmpegPath: "ffmpeg",
+      chunkAfterSeconds: 120,
+      cliChunkSeconds: 45,
+      httpRetryWindowMs: 0,
+    } as never);
+
+    await expect(transcribeVoice("/tmp/meeting.m4a")).resolves.toBe(
+      "chunk-000.wav transcript\nchunk-001.wav transcript",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(execFileImpl.mock.calls.filter(([file]) => file === "/tmp/qwen-python")).toHaveLength(2);
   });
 
   it("extracts short video audio to wav before transcription", async () => {
@@ -749,23 +908,34 @@ describe("createDefaultTranscribeVoice", () => {
     }
   });
 
-  it("warns and falls back to single-file transcription when ffprobe fails", async () => {
+  it("chunks audio before transcription when ffprobe cannot determine duration", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "telegram-message-input-"));
     const audioPath = path.join(root, "meeting.m4a");
-    await writeFile(audioPath, "audio");
+    await writeFile(audioPath, Buffer.alloc(128 * 1024 + 1));
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      text: async () => "single transcript",
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string };
+      return {
+        ok: true,
+        text: async () => `transcribed ${path.basename(body.path ?? "")}`,
+      };
     });
     const execFileImpl = vi.fn((
       file: string,
-      _args: readonly string[],
+      args: readonly string[],
       _options: object,
       callback: (error: Error | null, stdout: string, stderr: string) => void,
     ) => {
       if (file === "ffprobe") {
         callback(new Error("ffprobe missing"), "", "ffprobe missing");
+        return;
+      }
+      if (file === "ffmpeg") {
+        const pattern = String(args.at(-1));
+        void writeFile(pattern.replace("%03d", "000"), "chunk-000").then(
+          () => callback(null, "", ""),
+          (error) => callback(error, "", String(error)),
+        );
         return;
       }
       callback(new Error(`unexpected command: ${file}`), "", "");
@@ -777,11 +947,16 @@ describe("createDefaultTranscribeVoice", () => {
       fetchImpl: fetchImpl as never,
       execFileImpl,
       ffprobePath: "ffprobe",
+      ffmpegPath: "ffmpeg",
     } as never);
 
     try {
-      await expect(transcribeVoice(audioPath)).resolves.toBe("single transcript");
+      await expect(transcribeVoice(audioPath)).resolves.toBe("transcribed chunk-000.wav");
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("ffprobe failed"));
+      expect(fetchImpl).toHaveBeenCalledWith(
+        "http://127.0.0.1:8412/transcribe",
+        expect.objectContaining({ body: expect.stringContaining("chunk-000.wav") }),
+      );
     } finally {
       warnSpy.mockRestore();
       await removeTempRoot(root);
@@ -826,6 +1001,7 @@ describe("createDefaultTranscribeVoice", () => {
       ffprobePath: "ffprobe",
       ffmpegPath: "ffmpeg",
       chunkSeconds: 99_999,
+      env: {},
     } as never);
 
     await expect(transcribeVoice("/tmp/meeting.m4a")).resolves.toBe("chunk transcript");
@@ -949,12 +1125,20 @@ describe("createDefaultTranscribeVoice", () => {
         setTimeout(() => reject(new Error(`not aborted: ${String(signal?.aborted)}`)), 20);
       })
     );
+    const execFileImpl = vi.fn((
+      _file: string,
+      _args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => callback(null, "30\n", ""));
     const transcribeVoice = createDefaultTranscribeVoice({
       httpUrl: "http://127.0.0.1:8412/transcribe",
       cliPython: "",
       cliScript: "",
       fetchImpl: fetchImpl as never,
       watchdog,
+      execFileImpl,
+      ffprobePath: "ffprobe",
       httpTimeoutMs: 1,
     } as never);
 
@@ -971,12 +1155,20 @@ describe("createDefaultTranscribeVoice", () => {
       recordFailure: vi.fn().mockResolvedValue(undefined),
     };
     const fetchImpl = vi.fn().mockRejectedValue(new Error("connection refused"));
+    const execFileImpl = vi.fn((
+      _file: string,
+      _args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => callback(null, "30\n", ""));
     const transcribeVoice = createDefaultTranscribeVoice({
       httpUrl: "http://127.0.0.1:8412/transcribe",
       cliPython: "",
       cliScript: "",
       fetchImpl,
       watchdog,
+      execFileImpl,
+      ffprobePath: "ffprobe",
     });
 
     await expect(transcribeVoice("/tmp/voice.ogg")).rejects.toThrow("ASR not configured");
@@ -994,12 +1186,20 @@ describe("createDefaultTranscribeVoice", () => {
       ok: true,
       text: async () => "",
     });
+    const execFileImpl = vi.fn((
+      _file: string,
+      _args: readonly string[],
+      _options: object,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => callback(null, "30\n", ""));
     const transcribeVoice = createDefaultTranscribeVoice({
       httpUrl: "http://127.0.0.1:8412/transcribe",
       cliPython: "",
       cliScript: "",
       fetchImpl,
       watchdog,
+      execFileImpl,
+      ffprobePath: "ffprobe",
     });
 
     await expect(transcribeVoice("/tmp/voice.ogg")).rejects.toThrow("ASR not configured");

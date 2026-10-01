@@ -11,7 +11,12 @@ import {
   isCloudAsrCancelledError,
 } from "../runtime/asr-cloud.js";
 import { hasTranscribableMediaExtension } from "../runtime/media-extensions.js";
-import { formatBridgeMediaTranscript } from "../runtime/media-transcript.js";
+import {
+  formatBridgeMediaTranscript,
+  formatBridgePartialMediaTranscript,
+  isPartialMediaTranscriptionError,
+  PartialMediaTranscriptionError,
+} from "../runtime/media-transcript.js";
 import type { DownloadedAttachment } from "../runtime/file-workflow.js";
 import type { TelegramApi } from "./api.js";
 import { createAsrWatchdogFromEnv, type AsrWatchdog } from "./asr-watchdog.js";
@@ -151,7 +156,10 @@ async function maybePruneTelegramInbox(inboxDir: string): Promise<void> {
 //   ASR_HTTP_URL — warm ASR HTTP server (fast path)
 //   ASR_CLI_PYTHON + ASR_CLI_SCRIPT — CLI fallback (cold start)
 //   ASR_HTTP_TIMEOUT_MS — per-file/chunk ASR HTTP timeout
+//   ASR_HTTP_RETRY_WINDOW_MS — wait/retry before using the cold CLI fallback
 //   ASR_CHUNK_AFTER_SECONDS + ASR_CHUNK_SECONDS — split long audio before ASR
+//   ASR_CLI_CHUNK_SECONDS — fallback CLI segment size, including unknown-duration input
+//   ASR_UNKNOWN_DURATION_DIRECT_MAX_BYTES — tiny unknown-duration audio may skip pre-chunking
 //   ASR_MAX_AUDIO_SECONDS — hard per-request limit of the local ASR service
 // An empty ASR_HTTP_URL disables the HTTP path; missing CLI paths disable
 // the CLI path. If both are unavailable, voice messages fail cleanly
@@ -163,8 +171,15 @@ const ASR_CLI_PYTHON = process.env.ASR_CLI_PYTHON
 const ASR_CLI_SCRIPT = process.env.ASR_CLI_SCRIPT
   ?? (process.env.HOME ? path.join(process.env.HOME, "projects/qwen3-asr/transcribe.py") : undefined);
 const ASR_HTTP_TIMEOUT_MS = parsePositiveNumber(process.env.ASR_HTTP_TIMEOUT_MS, 180_000);
+const ASR_HTTP_RETRY_WINDOW_MS = parseNonNegativeNumber(process.env.ASR_HTTP_RETRY_WINDOW_MS, 20_000);
+const ASR_HTTP_RETRY_DELAY_MS = parsePositiveNumber(process.env.ASR_HTTP_RETRY_DELAY_MS, 1_000);
 const ASR_CHUNK_AFTER_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_AFTER_SECONDS, 120);
 const ASR_CHUNK_SECONDS = parsePositiveNumber(process.env.ASR_CHUNK_SECONDS, 60);
+const ASR_CLI_CHUNK_SECONDS = parsePositiveNumber(process.env.ASR_CLI_CHUNK_SECONDS, 45);
+const ASR_UNKNOWN_DURATION_DIRECT_MAX_BYTES = parseNonNegativeNumber(
+  process.env.ASR_UNKNOWN_DURATION_DIRECT_MAX_BYTES,
+  128 * 1024,
+);
 const ASR_MAX_AUDIO_SECONDS = parsePositiveNumber(process.env.ASR_MAX_AUDIO_SECONDS, 300);
 const VIDEO_EXTENSIONS = new Set([".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"]);
 const asrWatchdog = createAsrWatchdogFromEnv();
@@ -252,7 +267,7 @@ async function probeAudioDurationSeconds(
     } catch {
       return null;
     }
-    console.warn(`ASR ffprobe failed for ${path.basename(audioPath)}; long audio cannot be pre-chunked: ${summarizeError(error)}`);
+    console.warn(`ASR ffprobe failed for ${path.basename(audioPath)}; duration is unknown and large files will be pre-chunked by size: ${summarizeError(error)}`);
     return null;
   }
 }
@@ -319,8 +334,12 @@ export function createDefaultTranscribeVoice(options: {
   ffprobePath?: string;
   ffmpegPath?: string;
   httpTimeoutMs?: number;
+  httpRetryWindowMs?: number;
+  httpRetryDelayMs?: number;
   chunkAfterSeconds?: number;
   chunkSeconds?: number;
+  cliChunkSeconds?: number;
+  unknownDurationDirectMaxBytes?: number;
   maxAudioSeconds?: number;
   /**
    * Env source for the long-audio cloud ASR config (TINGWU_ASR_DIR,
@@ -341,6 +360,8 @@ export function createDefaultTranscribeVoice(options: {
   const ffprobePath = options.ffprobePath ?? "ffprobe";
   const ffmpegPath = options.ffmpegPath ?? "ffmpeg";
   const httpTimeoutMs = options.httpTimeoutMs ?? ASR_HTTP_TIMEOUT_MS;
+  const httpRetryWindowMs = options.httpRetryWindowMs ?? ASR_HTTP_RETRY_WINDOW_MS;
+  const httpRetryDelayMs = options.httpRetryDelayMs ?? ASR_HTTP_RETRY_DELAY_MS;
   const configuredMaxAudioSeconds = options.maxAudioSeconds ?? ASR_MAX_AUDIO_SECONDS;
   const maxAudioSeconds = Number.isFinite(configuredMaxAudioSeconds) && configuredMaxAudioSeconds > 0
     ? configuredMaxAudioSeconds
@@ -350,8 +371,16 @@ export function createDefaultTranscribeVoice(options: {
   const safeChunkSeconds = Math.max(1, Math.floor(maxAudioSeconds * 0.9));
   const chunkAfterSeconds = Math.min(options.chunkAfterSeconds ?? ASR_CHUNK_AFTER_SECONDS, maxAudioSeconds);
   const chunkSeconds = Math.min(options.chunkSeconds ?? ASR_CHUNK_SECONDS, safeChunkSeconds);
+  const cliChunkSeconds = Math.min(options.cliChunkSeconds ?? ASR_CLI_CHUNK_SECONDS, safeChunkSeconds);
+  const configuredUnknownDurationDirectMaxBytes = options.unknownDurationDirectMaxBytes
+    ?? ASR_UNKNOWN_DURATION_DIRECT_MAX_BYTES;
+  const unknownDurationDirectMaxBytes = Number.isFinite(configuredUnknownDurationDirectMaxBytes)
+    && configuredUnknownDurationDirectMaxBytes >= 0
+    ? configuredUnknownDurationDirectMaxBytes
+    : ASR_UNKNOWN_DURATION_DIRECT_MAX_BYTES;
   const cloudEnv = options.env ?? process.env;
   const factoryStateDir = options.stateDir;
+  let httpRetryCooldownUntil = 0;
 
   async function recordHttpSuccess(): Promise<void> {
     try {
@@ -369,39 +398,26 @@ export function createDefaultTranscribeVoice(options: {
     }
   }
 
-  async function transcribeSingleFile(audioPath: string, abortSignal?: AbortSignal): Promise<string> {
-    abortSignal?.throwIfAborted();
-    if (httpUrl) {
-      try {
-        const timeoutSignal = AbortSignal.timeout(httpTimeoutMs);
-        const response = await fetchImpl(httpUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: audioPath }),
-          signal: abortSignal ? AbortSignal.any([abortSignal, timeoutSignal]) : timeoutSignal,
-        });
-        abortSignal?.throwIfAborted();
-        if (response.ok) {
-          const text = await response.text();
-          if (text.trim()) {
-            await recordHttpSuccess();
-            return text.trim();
-          }
-          await recordHttpFailure(new Error("ASR HTTP server returned an empty transcript"));
-        } else {
-          await recordHttpFailure(new Error(`ASR HTTP server returned ${response.status}`));
-        }
-      } catch (error) {
-        // An operator cancellation must not be recorded as an ASR outage or
-        // fall through to the cold CLI path after /stop.
-        if (abortSignal?.aborted) {
-          throw error;
-        }
-        await recordHttpFailure(error);
-        // HTTP server unreachable — fall back to CLI if configured
+  async function waitBeforeHttpRetry(delayMs: number, abortSignal?: AbortSignal): Promise<void> {
+    if (delayMs <= 0) return;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        abortSignal?.removeEventListener("abort", abort);
+        resolve();
+      }, delayMs);
+      const abort = () => {
+        clearTimeout(timer);
+        reject(abortSignal?.reason instanceof Error ? abortSignal.reason : new Error("ASR retry cancelled"));
+      };
+      if (abortSignal?.aborted) {
+        abort();
+        return;
       }
-    }
+      abortSignal?.addEventListener("abort", abort, { once: true });
+    });
+  }
 
+  async function transcribeViaCli(audioPath: string, abortSignal?: AbortSignal): Promise<string> {
     if (!cliPython || !cliScript) {
       throw new Error(
         "ASR not configured: set ASR_HTTP_URL or ASR_CLI_PYTHON + ASR_CLI_SCRIPT env vars, or install the qwen3-asr defaults at ~/projects/qwen3-asr/.",
@@ -419,9 +435,128 @@ export function createDefaultTranscribeVoice(options: {
           reject(new Error(stderrText.trim() || error.message));
           return;
         }
-        resolve((Buffer.isBuffer(stdout) ? stdout.toString("utf8") : stdout).trim());
+        const transcript = (Buffer.isBuffer(stdout) ? stdout.toString("utf8") : stdout).trim();
+        if (!transcript) {
+          reject(new Error("ASR CLI returned an empty transcript"));
+          return;
+        }
+        resolve(transcript);
       });
     });
+  }
+
+  async function transcribeChunkFiles(
+    chunks: string[],
+    transcribeChunk: (chunk: string) => Promise<string>,
+    abortSignal?: AbortSignal,
+  ): Promise<string> {
+    const transcripts: string[] = [];
+    const failedChunkNumbers: number[] = [];
+    for (const [index, chunk] of chunks.entries()) {
+      abortSignal?.throwIfAborted();
+      try {
+        const transcript = (await transcribeChunk(chunk)).trim();
+        if (transcript) {
+          transcripts.push(transcript);
+        } else {
+          failedChunkNumbers.push(index + 1);
+          console.warn(`ASR chunk ${index + 1}/${chunks.length} returned an empty transcript`);
+        }
+      } catch (error) {
+        if (abortSignal?.aborted) throw error;
+        failedChunkNumbers.push(index + 1);
+        console.warn(`ASR chunk ${index + 1}/${chunks.length} transcription failed: ${summarizeError(error)}`);
+      }
+    }
+
+    const mergedTranscript = transcripts.join("\n").trim();
+    if (!mergedTranscript) {
+      throw new Error("ASR chunk transcription failed or returned empty for all chunks");
+    }
+    if (failedChunkNumbers.length > 0) {
+      throw new PartialMediaTranscriptionError(mergedTranscript, failedChunkNumbers, chunks.length);
+    }
+    return mergedTranscript;
+  }
+
+  async function transcribeViaChunkedCli(audioPath: string, abortSignal?: AbortSignal): Promise<string> {
+    const { chunks, cleanup } = await splitAudioIntoChunks(audioPath, {
+      chunkSeconds: cliChunkSeconds,
+      execFileImpl,
+      ffmpegPath,
+      ...(abortSignal ? { abortSignal } : {}),
+    });
+    try {
+      return await transcribeChunkFiles(
+        chunks,
+        async (chunk) => await transcribeViaCli(chunk, abortSignal),
+        abortSignal,
+      );
+    } finally {
+      await cleanup();
+    }
+  }
+
+  async function transcribeSingleFile(
+    audioPath: string,
+    duration: number | null,
+    abortSignal?: AbortSignal,
+    allowCliChunking = true,
+  ): Promise<string> {
+    abortSignal?.throwIfAborted();
+    if (httpUrl) {
+      const retryDeadline = Date.now() + Math.max(0, httpRetryWindowMs);
+      let failureRecorded = false;
+      while (true) {
+        let failure: Error;
+        let retryable = true;
+        try {
+          const timeoutSignal = AbortSignal.timeout(httpTimeoutMs);
+          const response = await fetchImpl(httpUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: audioPath }),
+            signal: abortSignal ? AbortSignal.any([abortSignal, timeoutSignal]) : timeoutSignal,
+          });
+          abortSignal?.throwIfAborted();
+          if (response.ok) {
+            const text = await response.text();
+            if (text.trim()) {
+              httpRetryCooldownUntil = 0;
+              await recordHttpSuccess();
+              return text.trim();
+            }
+            failure = new Error("ASR HTTP server returned an empty transcript");
+          } else {
+            failure = new Error(`ASR HTTP server returned ${response.status}`);
+            retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+          }
+        } catch (error) {
+          if (abortSignal?.aborted) throw error;
+          failure = error instanceof Error ? error : new Error(String(error));
+        }
+        if (!failureRecorded) {
+          failureRecorded = true;
+          await recordHttpFailure(failure);
+        }
+        const remainingMs = Date.now() < httpRetryCooldownUntil
+          ? 0
+          : retryDeadline - Date.now();
+        if (!retryable || !cliPython || !cliScript || remainingMs <= 0 || httpRetryWindowMs <= 0) break;
+        await waitBeforeHttpRetry(Math.min(httpRetryDelayMs, remainingMs), abortSignal);
+      }
+      httpRetryCooldownUntil = Date.now() + Math.max(0, httpRetryWindowMs);
+    }
+
+    if (
+      allowCliChunking &&
+      cliPython &&
+      cliScript &&
+      (duration === null || duration > cliChunkSeconds || isLikelyVideoFile(audioPath))
+    ) {
+      return transcribeViaChunkedCli(audioPath, abortSignal);
+    }
+    return transcribeViaCli(audioPath, abortSignal);
   }
 
   async function transcribeLocally(
@@ -430,7 +565,22 @@ export function createDefaultTranscribeVoice(options: {
     abortSignal?: AbortSignal,
   ): Promise<string> {
     abortSignal?.throwIfAborted();
-    const shouldExtractOrChunk = isLikelyVideoFile(audioPath) || (duration !== null && duration > chunkAfterSeconds);
+    // Unknown duration is not evidence that the media is short. Large files
+    // are segmented so a broken/missing ffprobe cannot make the local service
+    // silently clip a long recording. Tiny voice notes remain direct: this
+    // preserves service during a transient ffprobe outage without risking the
+    // local ASR duration cap at normal speech bitrates.
+    let unknownDurationNeedsChunking = false;
+    if (duration === null) {
+      try {
+        unknownDurationNeedsChunking = (await stat(audioPath)).size > unknownDurationDirectMaxBytes;
+      } catch {
+        // Let the configured ASR backend report an unreadable/missing input.
+      }
+    }
+    const shouldExtractOrChunk = unknownDurationNeedsChunking
+      || isLikelyVideoFile(audioPath)
+      || (duration !== null && duration > chunkAfterSeconds);
     if (shouldExtractOrChunk) {
       const { chunks, cleanup } = await splitAudioIntoChunks(audioPath, {
         chunkSeconds,
@@ -439,43 +589,17 @@ export function createDefaultTranscribeVoice(options: {
         ...(abortSignal ? { abortSignal } : {}),
       });
       try {
-        const transcripts: string[] = [];
-        let successfulChunks = 0;
-        for (const [index, chunk] of chunks.entries()) {
-          abortSignal?.throwIfAborted();
-          try {
-            const transcript = await transcribeSingleFile(chunk, abortSignal);
-            if (transcript.trim()) {
-              successfulChunks += 1;
-              transcripts.push(transcript.trim());
-            }
-          } catch (error) {
-            if (abortSignal?.aborted) {
-              throw error;
-            }
-            // Per-chunk failures are infrastructure errors, NOT user speech.
-            // Do not blend a "[chunk N/M transcription failed: ...]" marker into
-            // the transcript — the model would treat it as the user's words.
-            // Log it out-of-band and keep the successfully transcribed chunks.
-            console.warn(
-              `ASR chunk ${index + 1}/${chunks.length} transcription failed: ${summarizeError(error)}`,
-            );
-          }
-        }
-        const mergedTranscript = transcripts.join("\n").trim();
-        if (successfulChunks === 0) {
-          throw new Error("ASR chunk transcription failed for all chunks");
-        }
-        if (!mergedTranscript) {
-          throw new Error("ASR chunk transcription returned an empty transcript");
-        }
-        return mergedTranscript;
+        return await transcribeChunkFiles(
+          chunks,
+          async (chunk) => await transcribeSingleFile(chunk, chunkSeconds, abortSignal, false),
+          abortSignal,
+        );
       } finally {
         await cleanup();
       }
     }
 
-    return transcribeSingleFile(audioPath, abortSignal);
+    return transcribeSingleFile(audioPath, duration, abortSignal);
   }
 
   return async function defaultTranscribeVoice(audioPath: string, callOptions?: TranscribeMediaOptions): Promise<string> {
@@ -512,6 +636,7 @@ export function createDefaultTranscribeVoice(options: {
         if (isCloudAsrCancelledError(error) || abortSignal?.aborted) {
           throw error;
         }
+        if (isPartialMediaTranscriptionError(error)) throw error;
         // ANY other cloud failure falls back to a local transcription attempt.
         // The error messages from asr-cloud.ts carry no stderr content and no
         // env values, so this warn cannot leak signed URLs or credentials.
@@ -686,6 +811,17 @@ export async function prepareTelegramMessageInput(input: {
         if (isCloudAsrCancelledError(error) || abortSignal?.aborted) {
           throw error;
         }
+        if (isPartialMediaTranscriptionError(error)) {
+          producedAnyTranscript = true;
+          const transcriptBlock = formatBridgePartialMediaTranscript(
+            media.attachment.fileName ?? path.basename(media.localPath),
+            error.transcript,
+            error.failedChunkNumbers,
+            error.totalChunks,
+          );
+          text = text.trim() ? `${text.trim()}\n${transcriptBlock}` : transcriptBlock;
+          continue;
+        }
         // A PROMOTED document (a recording sent as a file) still has the file
         // itself to work with — before promotion existed it simply reached the
         // engine. Do not replace the whole turn with "转写失败"; fall through so
@@ -729,6 +865,18 @@ export async function prepareTelegramMessageInput(input: {
       } catch (error) {
         if (isCloudAsrCancelledError(error) || abortSignal?.aborted) {
           throw error;
+        }
+        if (isPartialMediaTranscriptionError(error)) {
+          appendQuotedAudioTranscript(
+            normalized.replyContext,
+            formatBridgePartialMediaTranscript(
+              quotedAudio.attachment.fileName ?? path.basename(quotedAudio.localPath),
+              error.transcript,
+              error.failedChunkNumbers,
+              error.totalChunks,
+            ),
+          );
+          continue;
         }
         return {
           kind: "reply",

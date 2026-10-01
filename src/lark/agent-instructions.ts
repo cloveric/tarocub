@@ -118,7 +118,7 @@ export function cloudAsrAgentInstruction(): string | undefined {
     return undefined;
   }
   const threshold = formatAsrThreshold(config.thresholdSeconds);
-  return `Inbound media is auto-transcribed (>=${threshold} → Aliyun Tingwu cloud, shorter → local Qwen ASR); never deny it. 强制本地转写/强制云端转写 forces a route only when sent WITH the audio (same message or burst), not afterwards.`;
+  return `Inbound audio is auto-transcribed (>=${threshold} → Aliyun Tingwu cloud, shorter → local Qwen ASR); never deny it. Videos up to 10 seconds are framed and audio-transcribed; longer or unprobeable videos are attached directly for inspection and are not automatically transcribed. 强制本地转写/强制云端转写 forces a route only when sent WITH the audio (same message or burst), not afterwards.`;
 }
 
 export type LarkAgentInstructionContext = "chat" | "card" | "comment" | "cron" | "bus" | "meeting";

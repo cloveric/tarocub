@@ -1,5 +1,5 @@
 import type { EngineApprovalDecision, EngineApprovalRequest, EngineStreamEvent } from "../codex/adapter.js";
-import { engineEventTimelineMetadata } from "../runtime/timeline-events.js";
+import { engineEventTimelineMetadata, shouldPersistEngineTimelineEvent } from "../runtime/timeline-events.js";
 import { BoardService } from "../state/board-service.js";
 import { handleBoardTelegramCommand, type BoardCommandContext } from "../telegram/board-commands.js";
 import { normalizeBoardTaskId } from "../state/board-store.js";
@@ -593,14 +593,16 @@ function createLarkBusEngineEventHandler(
   },
 ): (event: EngineStreamEvent) => Promise<void> {
   return async (event) => {
-    await appendLarkTimelineEvent(input.stateDir, normalized, {
-      type: "engine.event",
-      detail: event.type,
-      metadata: {
-        source: options.source,
-        ...engineEventTimelineMetadata(event),
-      },
-    });
+    if (shouldPersistEngineTimelineEvent(event)) {
+      await appendLarkTimelineEvent(input.stateDir, normalized, {
+        type: "engine.event",
+        detail: event.type,
+        metadata: {
+          source: options.source,
+          ...engineEventTimelineMetadata(event),
+        },
+      });
+    }
 
     if (event.type !== "task_notification" || event.settlesCurrentTurn || event.suppressUserDelivery) {
       return;
