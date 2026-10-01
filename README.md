@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/cloveric/tarocub/blob/main/LICENSE"><img src="https://img.shields.io/github/license/cloveric/tarocub?style=flat-square&color=818cf8" alt="License"></a>
+  <a href="https://github.com/cloveric/tarocub/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-818cf8?style=flat-square" alt="License"></a>
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20.17-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js >= 20.17">
   <img src="https://img.shields.io/badge/TypeScript-5.9-3178c6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
   <img src="https://img.shields.io/badge/engines-Codex%20%7C%20Claude%20%7C%20Kimi%20%7C%20DeepSeek%20%7C%20Antigravity-F97316?style=flat-square" alt="Codex | Claude Code | Kimi Code | DeepSeek Harness | Antigravity">
