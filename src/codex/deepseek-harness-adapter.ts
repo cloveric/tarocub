@@ -30,6 +30,14 @@ import { renderPrivateTurnInstructions } from "./turn-instructions.js";
 export const DEEPSEEK_HARNESS_TURN_TIMEOUT_MS = 6 * 60 * 60_000;
 export const DEEPSEEK_HARNESS_INACTIVITY_TIMEOUT_MS = ENGINE_DEFAULT_INACTIVITY_TIMEOUT_MS;
 
+function isLogicalTelegramSessionId(sessionId: string): boolean {
+  return sessionId.startsWith("telegram-");
+}
+
+function createNativeSessionId(): string {
+  return `session-${randomUUID()}`;
+}
+
 export interface DeepSeekHarnessGateway {
   connect(handlers: DeepSeekHarnessProtocolHandlers): Promise<void>;
   request(method: string, payload: unknown, signal?: AbortSignal): Promise<unknown>;
@@ -280,17 +288,18 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
 
   async createSession(_chatId: number): Promise<{ sessionId: string }> {
     await this.ensureOperational();
-    const sessionId = `session-${randomUUID()}`;
+    const sessionId = createNativeSessionId();
     await this.createOrAttachSession(sessionId, this.workspacePath);
     return { sessionId };
   }
 
   async sendUserMessage(sessionId: string, input: CodexUserMessageInput): Promise<CodexAdapterResponse> {
     this.assertUsable();
-    if (this.activeSessionClaims.has(sessionId)) {
-      throw new Error(`DeepSeek Harness session ${sessionId} already has an active turn`);
+    const requestedSessionId = sessionId;
+    if (this.activeSessionClaims.has(requestedSessionId)) {
+      throw new Error(`DeepSeek Harness session ${requestedSessionId} already has an active turn`);
     }
-    this.activeSessionClaims.add(sessionId);
+    this.activeSessionClaims.add(requestedSessionId);
 
     try {
       if (input.abortSignal?.aborted) {
@@ -298,6 +307,13 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
       }
       await this.ensureOperational(input.abortSignal);
       const workspace = path.resolve(input.workspaceOverride ?? this.workspacePath);
+      // SessionManager deliberately uses a stable telegram-* placeholder until
+      // an engine reports its real session id. DSH persists caller-supplied ids,
+      // so reusing that placeholder after /reset would silently restore the old
+      // history instead of starting a clean conversation.
+      if (isLogicalTelegramSessionId(sessionId)) {
+        sessionId = createNativeSessionId();
+      }
       await this.createOrAttachSession(sessionId, workspace);
       await this.configureSession(sessionId, input.abortSignal);
       if (input.files.length === 0 && input.text.trim() === "/compact") {
@@ -333,7 +349,7 @@ export class DeepSeekHarnessAdapter implements CodexAdapter {
 
       return await pending.promise;
     } finally {
-      this.activeSessionClaims.delete(sessionId);
+      this.activeSessionClaims.delete(requestedSessionId);
     }
   }
 

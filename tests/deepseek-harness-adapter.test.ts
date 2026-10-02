@@ -204,6 +204,73 @@ describe("DeepSeek Harness search instructions", () => {
 });
 
 describe("DeepSeekHarnessAdapter", () => {
+  it("creates a fresh native session whenever a reset chat returns to its logical placeholder", async () => {
+    const { adapter, gateway } = createAdapter();
+    const firstEvents: EngineStreamEvent[] = [];
+    const firstTurn = adapter.sendUserMessage("telegram-12345", {
+      text: "first clean turn",
+      files: [],
+      onEngineEvent: (event) => { firstEvents.push(event); },
+    });
+    await waitForCall(gateway, "session.prompt", 1);
+    const firstPrompt = gateway.calls.find((call) => call.method === "session.prompt")?.payload as {
+      sessionId: string;
+    };
+    expect(firstPrompt.sessionId).toMatch(/^session-/);
+    expect(firstPrompt.sessionId).not.toBe("telegram-12345");
+    expect(firstEvents).toContainEqual({ type: "session", sessionId: firstPrompt.sessionId });
+    await finishTurn(gateway, firstPrompt.sessionId, 1, 1, "first done");
+    await expect(firstTurn).resolves.toMatchObject({
+      text: "first done",
+      sessionId: firstPrompt.sessionId,
+    });
+
+    const secondEvents: EngineStreamEvent[] = [];
+    const secondTurn = adapter.sendUserMessage("telegram-12345", {
+      text: "turn after reset",
+      files: [],
+      onEngineEvent: (event) => { secondEvents.push(event); },
+    });
+    await waitForCall(gateway, "session.prompt", 2);
+    const prompts = gateway.calls.filter((call) => call.method === "session.prompt");
+    const secondPrompt = prompts[1]?.payload as { sessionId: string };
+    expect(secondPrompt.sessionId).toMatch(/^session-/);
+    expect(secondPrompt.sessionId).not.toBe(firstPrompt.sessionId);
+    expect(secondEvents).toContainEqual({ type: "session", sessionId: secondPrompt.sessionId });
+    await finishTurn(gateway, secondPrompt.sessionId, 1, 1, "second done");
+    await expect(secondTurn).resolves.toMatchObject({
+      text: "second done",
+      sessionId: secondPrompt.sessionId,
+    });
+
+    const createdSessionIds = gateway.calls
+      .filter((call) => call.method === "session.create")
+      .map((call) => (call.payload as { sessionId: string }).sessionId);
+    expect(createdSessionIds).toEqual([firstPrompt.sessionId, secondPrompt.sessionId]);
+    await adapter.destroy();
+  });
+
+  it("reports the fresh native session before a first-turn provider rejection", async () => {
+    const { adapter, gateway } = createAdapter();
+    gateway.responses.set("session.prompt", new Error("Content Exists Risk"));
+    const events: EngineStreamEvent[] = [];
+
+    const turn = adapter.sendUserMessage("telegram-67890", {
+      text: "provider rejects this turn",
+      files: [],
+      onEngineEvent: (event) => { events.push(event); },
+    });
+
+    await expect(turn).rejects.toThrow("Content Exists Risk");
+    const created = gateway.calls.find((call) => call.method === "session.create")?.payload as {
+      sessionId: string;
+    };
+    expect(created.sessionId).toMatch(/^session-/);
+    expect(created.sessionId).not.toBe("telegram-67890");
+    expect(events).toContainEqual({ type: "session", sessionId: created.sessionId });
+    await adapter.destroy();
+  });
+
   it("cancels and rejects a DeepSeek turn that exceeds the hard runtime timeout", async () => {
     vi.useFakeTimers();
     try {

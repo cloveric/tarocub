@@ -531,6 +531,45 @@ describe("Bridge", () => {
     });
   });
 
+  it("keeps an engine session binding when the first turn fails after session creation", async () => {
+    const accessStore: AccessStoreLike = {
+      load: vi.fn().mockResolvedValue({
+        policy: "allowlist",
+        pairedUsers: [],
+        allowlist: [84],
+        pendingPairs: [],
+      }),
+      issuePairingCode: vi.fn(),
+    };
+    const sessionManager: SessionManagerLike = {
+      getOrCreateSession: vi.fn().mockResolvedValue({ sessionId: "telegram-84" }),
+      bindSession: vi.fn().mockResolvedValue(undefined),
+    };
+    const adapter: CodexAdapter = {
+      sendUserMessage: vi.fn().mockImplementation(async (_sessionId, input) => {
+        await input.onEngineEvent?.({
+          type: "session",
+          sessionId: "session-created-before-failure",
+        });
+        throw new Error("Content Exists Risk");
+      }),
+      createSession: vi.fn(),
+    };
+
+    const bridge = new Bridge(accessStore, sessionManager, adapter);
+    await expect(bridge.handleAuthorizedMessage({
+      chatId: 84,
+      userId: 42,
+      chatType: "private",
+      text: "hello",
+      replyContext: undefined,
+      files: [],
+    })).rejects.toThrow("Content Exists Risk");
+
+    expect(sessionManager.bindSession).toHaveBeenCalledTimes(1);
+    expect(sessionManager.bindSession).toHaveBeenCalledWith(84, "session-created-before-failure");
+  });
+
   it("deduplicates concurrent engine session binding events", async () => {
     const accessStore: AccessStoreLike = {
       load: vi.fn().mockResolvedValue({
