@@ -9,6 +9,7 @@ export type FailureCategory =
   | "engine-backend"
   | "engine-rate-limit"
   | "engine-quota"
+  | "engine-content-policy"
   | "engine-timeout"
   | "engine-busy"
   | "engine-thread-locked"
@@ -133,6 +134,20 @@ export function classifyFailure(error: unknown): FailureCategory {
     )
   ) {
     return "engine-rate-limit";
+  }
+
+  // Provider-side safety filters reject the content of a turn, not the engine
+  // process. Retrying the same input or restarting the instance cannot help.
+  // Keep the exact DeepSeek wording and common structured provider codes here,
+  // before the generic "DeepSeek ... failed" engine-cli classification.
+  if (
+    text.includes("content exists risk")
+    || text.includes("responsibleai policy violation")
+    || /\b(?:content|safety)[\s_-]*(?:filter|policy)[\s_-]*(?:blocked|violation|rejected|triggered)\b/.test(text)
+    || /\b(?:blocked|rejected)\b.{0,48}\b(?:content|safety)[\s_-]*(?:filter|policy)\b/.test(text)
+    || (NAMED_ENGINE_RE.test(text) && /\b(?:content_filter|policy_violation)\b/.test(text))
+  ) {
+    return "engine-content-policy";
   }
 
   if (
@@ -290,6 +305,10 @@ export function getBusErrorSemantics(failureCategory: FailureCategory): BusError
       return { code: "engine_rate_limit", retryable: true };
     case "engine-quota":
       return { code: "engine_quota", retryable: false };
+    case "engine-content-policy":
+      // The user may retry after changing the request, but automatically
+      // replaying the same turn would only trigger the same policy decision.
+      return { code: "engine_content_policy", retryable: false };
     case "engine-timeout":
       // Re-running the same long task as-is just times out again; not auto-retryable.
       return { code: "engine_timeout", retryable: false };

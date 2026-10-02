@@ -94,6 +94,9 @@ export function renderLarkUserFacingError(
         : "Error: the engine usage quota is exhausted. Wait for the quota window to reset or increase the account quota; signing in again or restarting will not help.";
       return quotaResetHint ? `${message} Reset information: ${quotaResetHint}.` : message;
     }
+    if (category === "engine-content-policy") {
+      return "Error: the model's content-safety policy blocked this turn. Rephrase the request or remove the triggering context or attachment, then retry. If needed, send `/reset` or switch models; restarting the instance will not help.";
+    }
     if (category === "engine-timeout") {
       const duration = timeoutMinutes ? `${timeoutMinutes} minutes` : "the configured interval";
       return isInactivityTimeout
@@ -145,6 +148,9 @@ export function renderLarkUserFacingError(
       ? "错误：Kimi 当前 5 小时使用额度已用完。请等待额度窗口重置，或购买额外额度/升级套餐；重新登录或重启都无效。"
       : "错误：引擎使用额度已用完。请等待额度窗口重置或提高账户额度；重新登录或重启都无效。";
     return quotaResetHint ? `${message} 重置信息：${quotaResetHint}。` : message;
+  }
+  if (category === "engine-content-policy") {
+    return "错误：本轮被模型的内容安全策略拦截。请换一种表述，或移除可能触发风控的上下文或附件后重试；必要时发送 `/reset` 清除旧上下文，或切换模型。重启实例无效。";
   }
   if (category === "engine-timeout") {
     const duration = timeoutMinutes ? `${timeoutMinutes} 分钟` : "配置的时限";

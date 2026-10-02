@@ -165,6 +165,31 @@ describe("classifyFailure specificity", () => {
     expect(getBusErrorSemantics("engine-quota")).toEqual({ code: "engine_quota", retryable: false });
   });
 
+  it("classifies provider content-policy rejections without restart advice", () => {
+    const error = new Error(
+      "DeepSeek Harness agent failed: Content Exists Risk (request_id: e40cddfa-0c74-4109-b6af-c763266e2b77)",
+    );
+
+    expect(classifyFailure(error)).toBe("engine-content-policy");
+    expect(classifyFailure(new Error("Codex turn failed: content_filter"))).toBe("engine-content-policy");
+    expect(classifyFailure(new Error("documentation mentions content filters"))).toBe("unknown");
+    expect(getBusErrorSemantics("engine-content-policy"))
+      .toEqual({ code: "engine_content_policy", retryable: false });
+
+    const zh = renderLarkUserFacingError(error, "engine", "zh");
+    expect(zh).toContain("内容安全策略拦截");
+    expect(zh).toContain("/reset");
+    expect(zh).toContain("重启实例无效");
+    expect(zh).not.toContain("请重启实例后重试");
+
+    const en = renderLarkUserFacingError(error, "engine", "en");
+    expect(en).toContain("content-safety policy blocked");
+    expect(en).toContain("restarting the instance will not help");
+
+    expect(renderCategorizedErrorMessage("engine-content-policy", error.message, "zh", "deepseek"))
+      .toContain("换一种表述");
+  });
+
   it("renders model-capacity failures with actionable retry guidance", () => {
     const err = new Error("Selected model is at capacity. Please try a different model.");
     const zh = renderLarkUserFacingError(err, "engine", "zh");
@@ -311,6 +336,8 @@ describe("getBusErrorSemantics", () => {
     expect(getBusErrorSemantics("engine-backend")).toEqual({ code: "engine_backend", retryable: true });
     expect(getBusErrorSemantics("engine-rate-limit")).toEqual({ code: "engine_rate_limit", retryable: true });
     expect(getBusErrorSemantics("engine-quota")).toEqual({ code: "engine_quota", retryable: false });
+    expect(getBusErrorSemantics("engine-content-policy"))
+      .toEqual({ code: "engine_content_policy", retryable: false });
     expect(getBusErrorSemantics("unknown")).toEqual({ code: "unknown", retryable: true });
   });
 });
